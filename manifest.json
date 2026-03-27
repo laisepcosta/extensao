@@ -1,19 +1,21 @@
 {
   "manifest_version": 3,
   "name": "Assistente - Cessão de Crédito",
-  "version": "2.0",
-  "description": "Analisa cessões de crédito em precatórios com IA local.",
+  "version": "3.0",
+  "description": "Analisa cessões de crédito em precatórios com IA (Gemini Pro via automação).",
   "permissions": [
     "sidePanel",
     "clipboardWrite",
     "downloads",
     "cookies",
     "scripting",
-    "storage"
+    "storage",
+    "tabs"
   ],
   "host_permissions": [
     "https://eproc.tjmg.jus.br/*",
-    "https://eproc2g.tjmg.jus.br/*"
+    "https://eproc2g.tjmg.jus.br/*",
+    "https://gemini.google.com/*"
   ],
   "action": {
     "default_title": "Abrir Assistente de Cessão",
@@ -37,6 +39,15 @@
       ],
       "js": [
         "content_scripts/eproc.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://gemini.google.com/*"
+      ],
+      "js": [
+        "content_scripts/gemini.js"
       ],
       "run_at": "document_idle"
     }

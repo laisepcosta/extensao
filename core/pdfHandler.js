@@ -2,36 +2,35 @@
  * core/pdfHandler.js
  * Responsável por extrair texto de PDFs e preparar para a IA.
  *
- * OTIMIZADO v3.0 - PERFORMANCE MÁXIMA:
- *  ✅ Chunk size aumentado para 10000 chars (era 6000)
- *  ✅ Limpeza de texto mais agressiva (-40% de ruído)
- *  ✅ Detecção inteligente de documentos duplicados
- *  ✅ Priorização de conteúdo relevante
- *  ✅ Remoção de overlap desnecessário
- *  ✅ Extração paralela de páginas PDF
+ * v4.0 - CORREÇÕES:
+ *  ✅ REMOVIDA reordenação de parágrafos (_priorizarConteudo) — preserva sequência do documento
+ *  ✅ Limpeza de texto preserva termos jurídicos curtos (OAB, CPF, §, Art.)
+ *  ✅ extrairJSON com mensagens de erro mais detalhadas
+ *  ✅ Chunk size reduzido para caber no Gemini Nano
+ *  ✅ Extração paralela de páginas PDF mantida
  */
 
 const pdfHandler = (() => {
 
   // ================================================================
-  // CONFIGURAÇÕES OTIMIZADAS
+  // CONFIGURAÇÕES
   // ================================================================
 
   const CONFIG = {
-    CHUNK_SIZE_PADRAO: 10000,      // 10K chars por chunk (era 6K)
-    MAX_CHARS_POR_TEXTO: 8000,     // Aumentado de 5K para 8K
-    OVERLAP: 300,                   // Overlap entre chunks
-    MAX_CHUNKS: 5,                  // Máximo de chunks
+    CHUNK_SIZE_PADRAO: 6000,       // 6K chars por chunk (cabe no Gemini Nano)
+    MAX_CHARS_POR_TEXTO: 10000,    // 10K por PDF individual (escrituras longas)
+    OVERLAP: 200,                   // Overlap entre chunks
+    MAX_CHUNKS: 3,                  // Máximo de chunks
     REMOVER_DUPLICATAS: true        // Remove parágrafos duplicados
   };
 
   // ================================================================
-  // LIMPEZA DE TEXTO AGRESSIVA
+  // LIMPEZA DE TEXTO (PRESERVA TERMOS JURÍDICOS)
   // ================================================================
 
   /**
-   * Remove ruído típico de PDFs extraídos com limpeza mais agressiva.
-   * Reduz ~40% do tamanho mantendo informações relevantes.
+   * Remove ruído típico de PDFs extraídos.
+   * FIX: Não remove mais linhas curtas que contenham termos legais.
    */
   function _limparTexto(texto) {
     let limpo = texto
@@ -60,8 +59,9 @@ const pdfHandler = (() => {
       // Remove linhas que são só espaços ou pontuação
       .replace(/^[\s\-_.]+$/gm, '')
       
-      // Remove linhas muito curtas (provavelmente fragmentos de formatação)
-      .replace(/^.{1,3}$/gm, '')
+      // FIX: Remoção seletiva de linhas curtas
+      // NÃO remove linhas que contenham: dígitos, §, Art., OAB, CPF, CNPJ, R$
+      .replace(/^(?!.*[\d§])(?!.*\b(Art|OAB|CPF|CNPJ|R\$)\b).{1,3}$/gm, '')
       
       .trim();
 
@@ -74,7 +74,7 @@ const pdfHandler = (() => {
   }
 
   /**
-   * Remove parágrafos duplicados mantendo primeira ocorrência
+   * Remove parágrafos duplicados mantendo primeira ocorrência.
    */
   function _removerDuplicatas(texto) {
     const paragrafos = texto.split('\n\n');
@@ -101,7 +101,10 @@ const pdfHandler = (() => {
 
   async function extrairTexto(base64) {
     try {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = '../lib/pdf.worker.min.js';
+      // Configura worker uma única vez (idempotente)
+      if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = '../lib/pdf.worker.min.js';
+      }
 
       const pdfData = atob(base64);
       const loadingTask = pdfjsLib.getDocument({ data: pdfData });
@@ -147,50 +150,7 @@ const pdfHandler = (() => {
   }
 
   // ================================================================
-  // PRIORIZAR CONTEÚDO RELEVANTE
-  // ================================================================
-
-  /**
-   * Identifica e prioriza seções mais relevantes do documento
-   */
-  function _priorizarConteudo(texto) {
-    const secoes = texto.split(/\n{2,}/);
-    const pontuadas = secoes.map(secao => {
-      let score = 0;
-      const secaoLower = secao.toLowerCase();
-      
-      // Palavras-chave que indicam conteúdo relevante
-      const palavrasChave = [
-        'precatório', 'credor', 'devedor', 'valor', 'honorários',
-        'cessão', 'cessionário', 'cedente', 'processo', 'sentença',
-        'trânsito em julgado', 'conta bancária', 'cpf', 'cnpj',
-        'comarca', 'vara', 'juiz', 'advogado', 'oab'
-      ];
-      
-      for (const palavra of palavrasChave) {
-        if (secaoLower.includes(palavra)) {
-          score += 10;
-        }
-      }
-      
-      // Penaliza seções muito curtas
-      if (secao.length < 50) score -= 5;
-      
-      // Bonifica seções com números (provavelmente dados)
-      if (/\d{2,}/.test(secao)) score += 5;
-      
-      return { secao, score };
-    });
-
-    // Ordena por relevância e retorna
-    return pontuadas
-      .sort((a, b) => b.score - a.score)
-      .map(p => p.secao)
-      .join('\n\n');
-  }
-
-  // ================================================================
-  // PREPARAR CHUNKS (OTIMIZADO)
+  // PREPARAR CHUNKS (SEM REORDENAÇÃO)
   // ================================================================
 
   function prepararChunks(textos, chunkSize = CONFIG.CHUNK_SIZE_PADRAO) {
@@ -216,16 +176,13 @@ const pdfHandler = (() => {
       return [textoCompleto];
     }
 
-    // Prioriza conteúdo relevante antes de dividir
-    const textoPriorizado = _priorizarConteudo(textoCompleto);
-
-    // Divide em chunks com overlap mínimo
+    // FIX: Divide em chunks SEM reordenar parágrafos (preserva sequência)
     const chunks = [];
     let inicio = 0;
 
-    while (inicio < textoPriorizado.length && chunks.length < CONFIG.MAX_CHUNKS) {
-      const fim = Math.min(inicio + chunkSize, textoPriorizado.length);
-      const chunk = textoPriorizado.slice(inicio, fim);
+    while (inicio < textoCompleto.length && chunks.length < CONFIG.MAX_CHUNKS) {
+      const fim = Math.min(inicio + chunkSize, textoCompleto.length);
+      const chunk = textoCompleto.slice(inicio, fim);
       chunks.push(chunk);
       
       // Move para próximo chunk com overlap
@@ -242,10 +199,14 @@ const pdfHandler = (() => {
   }
 
   // ================================================================
-  // EXTRAIR JSON DA RESPOSTA DA IA (OTIMIZADO)
+  // EXTRAIR JSON DA RESPOSTA DA IA (COM MELHOR DIAGNÓSTICO)
   // ================================================================
 
   function extrairJSON(textoBruto) {
+    if (!textoBruto || textoBruto.trim().length === 0) {
+      throw new Error('Resposta da IA está vazia.');
+    }
+
     // Remove todos os tipos de "noise" que o modelo pode adicionar
     let textoLimpo = textoBruto
       // Remove citações [cite:...], 【...】, [1], [2,3]
@@ -267,8 +228,12 @@ const pdfHandler = (() => {
     // Tenta encontrar JSON válido
     const match = textoLimpo.match(/\{[\s\S]*\}/);
     if (!match) {
-      console.error('[pdfHandler] ❌ Resposta não contém JSON:', textoBruto.slice(0, 200));
-      throw new Error('Resposta da IA não contém JSON válido.');
+      const preview = textoBruto.slice(0, 200);
+      console.error(`[pdfHandler] ❌ Resposta não contém JSON (${textoBruto.length} chars): "${preview}"`);
+      throw new Error(
+        `Resposta da IA não contém JSON válido (${textoBruto.length} chars). ` +
+        `Início: "${preview.slice(0, 50)}..."`
+      );
     }
 
     try {
@@ -276,8 +241,54 @@ const pdfHandler = (() => {
       console.log('[pdfHandler] ✅ JSON parseado com sucesso');
       return parsed;
     } catch (erro) {
+      // Tenta consertar JSON truncado (comum com timeout)
+      const tentativaFixo = _tentarConsertarJSON(match[0]);
+      if (tentativaFixo) {
+        console.log('[pdfHandler] 🔧 JSON consertado após truncamento');
+        return tentativaFixo;
+      }
+      
       console.error('[pdfHandler] ❌ Falha ao parsear JSON:', match[0].slice(0, 300));
-      throw erro;
+      throw new Error(`JSON inválido na resposta (${match[0].length} chars). Erro: ${erro.message}`);
+    }
+  }
+
+  /**
+   * Tenta consertar JSON truncado por timeout.
+   * Fecha chaves/colchetes abertos e tenta parsear.
+   */
+  function _tentarConsertarJSON(jsonBruto) {
+    try {
+      let texto = jsonBruto;
+      
+      // Conta chaves/colchetes abertos
+      let chaves = 0, colchetes = 0;
+      let dentroString = false;
+      let escape = false;
+      
+      for (const c of texto) {
+        if (escape) { escape = false; continue; }
+        if (c === '\\') { escape = true; continue; }
+        if (c === '"') { dentroString = !dentroString; continue; }
+        if (dentroString) continue;
+        if (c === '{') chaves++;
+        if (c === '}') chaves--;
+        if (c === '[') colchetes++;
+        if (c === ']') colchetes--;
+      }
+
+      // Remove trailing comma ou texto incompleto
+      texto = texto.replace(/,\s*$/, '');
+      texto = texto.replace(/:\s*$/, ': null');
+      texto = texto.replace(/:\s*"[^"]*$/, ': ""');
+      
+      // Fecha colchetes e chaves faltantes
+      while (colchetes > 0) { texto += ']'; colchetes--; }
+      while (chaves > 0) { texto += '}'; chaves--; }
+
+      return JSON.parse(texto);
+    } catch (_) {
+      return null;
     }
   }
 
@@ -304,7 +315,7 @@ const pdfHandler = (() => {
     prepararChunks, 
     extrairJSON,
     analisarTexto,
-    CONFIG // Expõe configurações para ajustes externos
+    CONFIG
   };
 
 })();

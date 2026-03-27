@@ -9,7 +9,7 @@
  *   core/pdfHandler.js
  *   core/aiService.js
  *   core/templateLoader.js   ← declara `templateLoader`
- *   core/ruleEngine.js       ← declara `processarDecisoes`
+ *   core/ruleEngine.js       ← declara `ruleEngine`
  *   core/templateRenderer.js ← declara `templateRenderer`
  *   templates/cessao-credito/rules.js
  *   templates/cessao-credito/renderer.js
@@ -198,8 +198,8 @@ document.addEventListener('DOMContentLoaded', function () {
   document.getElementById('btnConfirmarCertidao')
     ?.addEventListener('click', function () {
       try {
-        const resultado = processarDecisoes(
-          estadoApp.jsonBruto, estadoApp.inputs
+        const resultado = ruleEngine.processar(
+          estadoApp.jsonBruto, estadoApp.inputs, estadoApp.templateId
         );
         const htmlMinuta = templateRenderer.renderizarMinuta(
           estadoApp.jsonBruto, estadoApp.inputs, resultado.textos, estadoApp.templateId
@@ -333,21 +333,53 @@ async function _baixarEProcessar(anexos) {
       const onProgressoModelo = (pct) => {
         msgProg.textContent = `⬇️ Baixando modelo Gemini Nano: ${pct}%...`;
       };
- 
-      const onInferencia = (charsGerados) => {
-        msgProg.textContent = `🧠 Analisando documentos... (${charsGerados} chars)`;
-        // Barra de progresso: de 90% até 98% proporcional ao JSON gerado
-        const progEstimado = Math.min(98, 90 + (charsGerados / 3000) * 8);
+
+      const onInferencia = (charsGerados, labelSubTarefa) => {
+        // FIX: Sub-tarefas enviam label em vez de chunkIndex
+        const etapa = typeof labelSubTarefa === 'string'
+          ? labelSubTarefa
+          : `chunk ${labelSubTarefa + 1}`;
+        msgProg.textContent = `🧠 Analisando: ${etapa}... (${charsGerados} chars)`;
+        const progEstimado = Math.min(98, 90 + (charsGerados / 2000) * 8);
         barra.style.width = progEstimado + '%';
       };
- 
+
       const resultadoIA = await aiService.extrair({
-        textos:          textosExtraidos,
-        promptTemplate:  template.prompt,
+        textos: textosExtraidos,
+        promptTemplate: template.prompt,
         dadosPrecatorio,
-        onProgresso:     onProgressoModelo,
+        onProgresso: onProgressoModelo,
         onInferencia
       });
+
+      // FIX: Tratar resultado da IA (sucesso, parcial, ou falha)
+      if (resultadoIA.sucesso) {
+        estadoApp.jsonBruto = resultadoIA.dados;
+
+        // Salvar no session storage para recuperação
+        try {
+          chrome.storage.session.set({ ultimoJSON: resultadoIA.dados });
+        } catch (_) { }
+
+        progresso.classList.add('hidden');
+        barra.style.width = '100%';
+        btnAnalisar.disabled = false;
+
+        mudarPasso(0, 1);
+        _carregarDadosNaTela(estadoApp.jsonBruto);
+
+        // Aviso se extração incompleta
+        if (resultadoIA.completude && resultadoIA.completude < 0.5) {
+          console.warn('[Assistente] Completude baixa:', resultadoIA.completude);
+          const msgArea = document.createElement('div');
+          msgArea.style.cssText = 'background:#fff3cd;border:1px solid #ffc107;padding:8px;border-radius:4px;margin-top:8px;font-size:12px;';
+          msgArea.innerHTML = '⚠️ <strong>Extração parcial.</strong> A IA preencheu apenas parte dos campos. Revise e complete manualmente antes de prosseguir.';
+          document.getElementById('areaCamposAutopreenchidos')?.prepend(msgArea);
+        }
+
+      } else {
+        throw new Error(resultadoIA.motivo || 'IA não retornou dados válidos.');
+      }
 
     } catch (erroIA) {
       console.warn('[Assistente] Falha na IA, ativando modo manual:', erroIA.message);
@@ -569,7 +601,6 @@ function configurarCopia(btnId, areaId, label) {
 }
 
 function capturarInputsFinais() {
-  // Coleta os nomes dos cedentes marcados como legítimos
   const cedentesLegitimos = [];
   document.querySelectorAll('.check-cedente:checked').forEach(chk => {
     cedentesLegitimos.push(chk.dataset.nome);
@@ -591,8 +622,6 @@ function capturarInputsFinais() {
     opcaoDivergencia: document.getElementById('opcaoDivergencia')?.value || 'INTIMAR',
     inferiorEquivaleTotalidade: document.getElementById('inferiorEquivaleTotalidade')?.checked || false,
     perdaObjetoCertificada: document.getElementById('certificarPerdaObjeto')?.checked || false,
-    // ↓ CAMPOS NOVOS (necessários para rules.js e renderer.js)
     cedentesLegitimos,
-    dataComunicacao: document.getElementById('dataComunicacaoCessao')?.value || ''
   };
 }
