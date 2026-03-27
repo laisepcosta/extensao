@@ -1,0 +1,43 @@
+{
+  "id": "cessao-credito",
+  "nome": "Cessão de Crédito em Precatório",
+  "versao": "2.0",
+  "descricao": "Analisa instrumentos de cessão de crédito em precatórios do TJMG.",
+  "campos_formulario": [
+    {
+      "secao": "B",
+      "titulo": "Eventos da Cessão",
+      "campos": [
+        { "id": "eventoComunicacaoCessao", "label": "EV. COMUNICAÇÃO", "tipo": "text" },
+        { "id": "eventoInstrumentoCessao", "label": "EV. INSTRUMENTO", "tipo": "text" },
+        { "id": "dataComunicacaoCessao",   "label": "DATA DA COMUNICAÇÃO", "tipo": "text" }
+      ]
+    },
+    {
+      "secao": "C",
+      "titulo": "Destaques de Honorários",
+      "campos": [
+        {
+          "id": "existeDestaquePrevio",
+          "label": "Destaque JÁ ANOTADO (Histórico)",
+          "tipo": "checkbox",
+          "revelaDependentes": ["divDestaquePrevio"]
+        },
+        {
+          "id": "deferidoNestaAnalise",
+          "label": "Destaque NOVO (A ser deferido)",
+          "tipo": "checkbox",
+          "revelaDependentes": ["divDestaqueNovo"]
+        }
+      ]
+    }
+  ],
+  "secoes_conferencia": [
+    { "id": "dados_precatorio",    "titulo": "DADOS DO PRECATÓRIO",          "cor": "#e9ecef" },
+    { "id": "cessao",              "titulo": "REQUERIMENTO DE CESSÃO",        "cor": "#d1ecf1" },
+    { "id": "partes",              "titulo": "PARTES",                        "cor": "#d1ecf1" },
+    { "id": "honorarios",          "titulo": "HONORÁRIOS (NOVO PEDIDO)",      "cor": "#fff3cd" },
+    { "id": "objeto_economico",    "titulo": "OBJETO ECONÔMICO E EFEITOS",    "cor": "#d4edda" }
+  ],
+  "outputs": ["minuta", "tabela_nsc"]
+}

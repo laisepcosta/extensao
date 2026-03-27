@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="style.css">
+  <title>Assistente de Cessão</title>
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════
+       PASSO 0 — Seleção de Documentos (via eProc)
+  ═══════════════════════════════════════════════════════ -->
+  <div class="step-container" id="passo0">
+    <h2>0. Selecionar Documentos
+      <button id="btnReiniciar" class="btn-outline"
+        style="width:auto;margin-top:-5px;padding:5px 10px;">Reiniciar</button>
+    </h2>
+
+    <!-- Estado: aguardando eProc -->
+    <div id="statusEproc" style="
+      text-align:center;padding:20px 10px;
+      border:2px dashed #ced4da;border-radius:8px;
+      color:#6c757d;font-size:13px;background:#fafbfc;">
+      <div style="font-size:24px;margin-bottom:8px;">⚖️</div>
+      <strong>Aguardando eProc...</strong><br>
+      <small>Abra um processo no eProc TJMG e o assistente detectará automaticamente os documentos.</small>
+      <div style="margin-top:12px;">
+        <button id="btnUsarModoManual"
+          style="width:auto;padding:6px 14px;font-size:12px;
+            background:transparent;border:1px solid #6c757d;
+            color:#6c757d;border-radius:4px;cursor:pointer;margin-top:0;">
+          Usar modo manual (colar JSON)
+        </button>
+      </div>
+    </div>
+
+    <!-- Painel preenchido pelo documentSelector.js -->
+    <div id="painelDocumentos" class="hidden" style="margin-top:10px;"></div>
+
+    <!-- Botão de ação (aparece após detecção) -->
+    <button id="btnAnalisarSelecionados" class="btn-success hidden"
+      style="margin-top:12px;">
+      ▶ Analisar Documentos Selecionados
+    </button>
+
+    <!-- Indicador de progresso durante download -->
+    <div id="progressoDownload" class="hidden"
+      style="margin-top:10px;padding:10px;background:#e8f4fd;
+        border-radius:4px;font-size:13px;text-align:center;color:#0056b3;">
+      <div id="msgProgresso">⏬ Baixando documentos...</div>
+      <div style="margin-top:6px;background:#c8e6fa;border-radius:3px;height:6px;">
+        <div id="barraProgresso"
+          style="height:100%;background:#0056b3;border-radius:3px;
+            width:0%;transition:width 0.3s;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       PASSO 1 — Dados e Inputs (manual ou pós-IA)
+  ═══════════════════════════════════════════════════════ -->
+  <div class="step-container hidden" id="passo1">
+    <h2>1. Conferir Dados Extraídos</h2>
+
+    <!-- Indicador de status da IA -->
+    <div id="statusIA" style="font-size:12px;margin-bottom:10px;color:#6c757d;">
+      🔄 Verificando IA local...
+    </div>
+
+    <!-- Modo manual: textarea de JSON (visível apenas no fallback) -->
+    <div id="modoManualContainer">
+      <textarea id="jsonInput" rows="6" placeholder="Cole o JSON aqui..."></textarea>
+      <button id="btnSalvarJSON">Salvar e Carregar Dados</button>
+    </div>
+
+    <div id="areaCamposAutopreenchidos" class="hidden" style="margin-top:20px;">
+      <hr style="border:0;border-top:1px solid #ddd;margin-bottom:20px;">
+
+      <!-- A. Identificação -->
+      <fieldset>
+        <legend>A. Identificação do Precatório</legend>
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+          <div style="flex:1.5;">
+            <label class="label-mini">NÚMERO (GV)</label>
+            <input type="text" id="numPrecatorioReal" readonly
+              style="background:#e9ecef;color:#495057;cursor:not-allowed;">
+          </div>
+          <div style="flex:1;">
+            <label class="label-mini">NATUREZA</label>
+            <input type="text" id="naturezaPrec" readonly
+              style="background:#e9ecef;color:#495057;cursor:not-allowed;">
+          </div>
+          <div style="flex:1;">
+            <label class="label-mini">VENCIMENTO</label>
+            <input type="text" id="vencimentoPrec" readonly
+              style="background:#e9ecef;color:#495057;cursor:not-allowed;">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <div style="flex:1;">
+            <label class="label-mini">PROCESSO ORIGINÁRIO</label>
+            <input type="text" id="procOriginario" readonly
+              style="background:#e9ecef;color:#495057;cursor:not-allowed;">
+          </div>
+          <div style="flex:1;">
+            <label class="label-mini">PROCESSO SEI</label>
+            <input type="text" id="procSei" readonly
+              style="background:#e9ecef;color:#495057;cursor:not-allowed;">
+          </div>
+          <div style="flex:1;">
+            <label class="label-mini">EPROC</label>
+            <input type="text" id="procEproc" readonly
+              style="background:#e9ecef;color:#495057;cursor:not-allowed;">
+          </div>
+        </div>
+      </fieldset>
+
+      <!-- B. Eventos -->
+      <fieldset>
+        <legend>B. Eventos da Cessão</legend>
+        <div style="display:flex;gap:8px;">
+          <div style="flex:1;">
+            <label class="label-mini">EV. COMUNICAÇÃO</label>
+            <input type="text" id="eventoComunicacaoCessao">
+          </div>
+          <div style="flex:1;">
+            <label class="label-mini">EV. INSTRUMENTO</label>
+            <input type="text" id="eventoInstrumentoCessao">
+          </div>
+        </div>
+        <label class="label-mini">DATA DA COMUNICAÇÃO</label>
+        <input type="text" id="dataComunicacaoCessao">
+      </fieldset>
+
+      <!-- C. Destaques -->
+      <fieldset>
+        <legend>C. Destaques de Honorários</legend>
+
+        <div class="checkbox-group">
+          <input type="checkbox" id="existeDestaquePrevio">
+          <label for="existeDestaquePrevio" style="color:#0056b3;font-weight:bold;">
+            Destaque JÁ ANOTADO (Histórico)
+          </label>
+        </div>
+
+        <div id="divDestaquePrevio" class="hidden"
+          style="padding:10px;margin-bottom:15px;
+            border-left:3px solid #0056b3;background:#f8fbff;">
+          <div style="display:flex;gap:8px;margin-bottom:5px;">
+            <div style="flex:2;">
+              <label class="label-mini">BENEFICIÁRIO ANTERIOR</label>
+              <input type="text" id="beneficiarioDestaquePrevio"
+                placeholder="Nome do Advogado/Sociedade">
+            </div>
+            <div style="flex:0.5;">
+              <label class="label-mini">%</label>
+              <input type="number" id="percDestaquePrevio" placeholder="0">
+            </div>
+            <div style="flex:1;">
+              <label class="label-mini">EVENTO</label>
+              <input type="text" id="eventoDestaquePrevio" placeholder="Ev.">
+            </div>
+          </div>
+        </div>
+
+        <div class="checkbox-group" style="margin-top:10px;">
+          <input type="checkbox" id="deferidoNestaAnalise">
+          <label for="deferidoNestaAnalise" style="color:#28a745;font-weight:bold;">
+            Destaque NOVO (A ser deferido)
+          </label>
+        </div>
+
+        <div id="divDestaqueNovo" class="hidden"
+          style="padding:10px;border-left:3px solid #28a745;background:#f4fff6;">
+          <div style="margin-bottom:8px;">
+            <label class="label-mini">BENEFICIÁRIO ATUAL</label>
+            <input type="text" id="beneficiarioDestaqueNovo">
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:8px;">
+            <div style="flex:1;">
+              <label class="label-mini">% PEDIDO</label>
+              <input type="number" id="percDeferidoAgora">
+            </div>
+            <div style="flex:1;">
+              <label class="label-mini">EV. PEDIDO</label>
+              <input type="text" id="eventoPedidoDestaque">
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <div style="flex:1;">
+              <label class="label-mini">EV. CONTRATO</label>
+              <input type="text" id="eventoContratoPedido">
+            </div>
+            <div style="flex:1;">
+              <label class="label-mini">DATA PEDIDO</label>
+              <input type="text" id="dataPedidoDestaque">
+            </div>
+          </div>
+        </div>
+
+        <!-- Painel de Alerta de Divergência -->
+        <div id="painelAlertaDestaque" class="hidden"
+          style="margin-top:15px;padding:12px;border-radius:6px;
+            border:1px solid #dc3545;background:#fff5f5;">
+          <div id="msgAlertaUnificada"
+            style="color:#721c24;font-weight:bold;font-size:13px;margin-bottom:10px;">
+          </div>
+          <div id="acoesAlerta"
+            style="border-top:1px solid #f5c6cb;margin-top:10px;padding-top:10px;">
+            <div id="areaCheckPerda"
+              style="display:flex;flex-direction:row;align-items:center;
+                gap:8px;padding-top:10px;">
+              <input type="checkbox" id="certificarPerdaObjeto"
+                style="margin:0;width:auto;height:auto;flex-shrink:0;cursor:pointer;">
+              <label for="certificarPerdaObjeto"
+                style="margin:0;font-size:12px;color:#721c24;cursor:pointer;">
+                Certifico que o pedido novo
+                <strong>perdeu o objeto</strong> por duplicidade.
+              </label>
+            </div>
+            <div id="areaDecisaoDivergencia" class="hidden">
+              <label class="label-mini"
+                style="color:#dc3545;font-weight:bold;display:block;margin-bottom:4px;">
+                COMO DESEJA TRATAR A DIVERGÊNCIA?
+              </label>
+              <select id="opcaoDivergencia"
+                style="width:100%;border:1px solid #dc3545;
+                  padding:4px;border-radius:4px;">
+                <option value="INTIMAR">Intimar partes para esclarecer</option>
+                <option value="LIMITAR">Limitar ao teto da ressalva</option>
+                <option value="IGNORAR">Manter conforme pedido (erro material)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </fieldset>
+
+      <!-- D. Legitimidade -->
+      <fieldset>
+        <legend>D. Legitimidade dos Cedentes</legend>
+        <p style="font-size:14px;color:#666;margin-bottom:8px;">
+          Selecione os cedentes que <strong>de fato</strong>
+          possuem crédito no precatório:
+        </p>
+        <div id="containerCedentesCheck"
+          style="background:#fff;border:1px solid #ced4da;padding:10px;
+            border-radius:4px;max-height:100px;overflow-y:auto;">
+          <span style="color:#999;font-size:14px;">Aguardando JSON...</span>
+        </div>
+      </fieldset>
+
+      <!-- E. Interpretação -->
+      <fieldset>
+        <legend>E. Interpretação</legend>
+        <div class="checkbox-group">
+          <input type="checkbox" id="inferiorEquivaleTotalidade">
+          <label for="inferiorEquivaleTotalidade">
+            Equivale a 100% da cota do(s) cedente(s) selecionado(s).
+          </label>
+        </div>
+      </fieldset>
+
+      <button id="btnGerarCertidao" class="btn-success">
+        Gerar Certidão de Conferência
+      </button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       PASSO 2 — Certidão de Conferência
+  ═══════════════════════════════════════════════════════ -->
+  <div class="step-container hidden" id="passo2">
+    <h2>2. Certidão de Conferência</h2>
+    <div id="tabelaCertidaoVisual"
+      style="max-height:calc(100vh - 180px);overflow-y:auto;
+        border:1px solid #eee;"></div>
+    <button id="btnConfirmarCertidao" class="btn-success">
+      Confirmar e Gerar Minuta
+    </button>
+    <button id="btnVoltarPasso1"
+      style="background:#6c757d;font-size:14px;margin-top:10px;">
+      ← Corrigir Dados
+    </button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       PASSO 3 — Minuta e Tabela NSC
+  ═══════════════════════════════════════════════════════ -->
+  <div class="step-container hidden" id="passo3"
+    style="display:flex;flex-direction:column;
+      height:calc(100vh - 30px);margin-bottom:0;">
+    <h2>3. Minuta e Tabela NSC</h2>
+
+    <h3 style="font-size:12px;color:#555;margin-bottom:5px;margin-top:0;">
+      Minuta do Despacho:
+    </h3>
+    <div id="previaMinuta" class="preview-box" style="flex:1;"></div>
+
+    <h3 style="font-size:12px;color:#555;margin-top:10px;margin-bottom:5px;">
+      Tabela NSC (Líquido):
+    </h3>
+    <div id="previaTabela" class="preview-box"
+      style="flex:1;border-left-color:#0056b3;"></div>
+
+    <textarea id="outputMinuta" class="hidden"></textarea>
+    <textarea id="outputTabela" class="hidden"></textarea>
+
+    <div style="margin-top:auto;padding-top:15px;">
+      <button id="btnCopiarTudo"
+        style="background:#17a2b8;color:white;border-radius:6px;
+          font-weight:bold;border:none;cursor:pointer;
+          width:100%;margin-bottom:10px;padding:12px;">
+        📋 Copiar Tudo (Minuta + Tabela)
+      </button>
+      <div class="flex-row">
+        <button id="btnCopiarMinuta" class="btn-outline"
+          style="font-size:11px;padding:6px;">Só Minuta</button>
+        <button id="btnCopiarTabela" class="btn-outline"
+          style="font-size:11px;padding:6px;">Só Tabela</button>
+      </div>
+    </div>
+
+    <button id="btnVoltarPasso2"
+      style="background:#6c757d;font-size:12px;margin-top:10px;">
+      ← Voltar para Conferência
+    </button>
+  </div>
+
+  <!-- ═══ Scripts — core primeiro, depois template, depois UI ═══ -->
+  <script src="../core/pdfHandler.js"></script>
+  <script src="../core/aiService.js"></script>
+  <script src="../core/templateLoader.js"></script>
+  <script src="../core/ruleEngine.js"></script>
+  <script src="../core/templateRenderer.js"></script>
+
+  <script src="../templates/cessao-credito/rules.js"></script>
+  <script src="../templates/cessao-credito/renderer.js"></script>
+
+  <script src="components/documentSelector.js"></script>
+  <script src="popup.js"></script>
+
+</body>
+</html>
