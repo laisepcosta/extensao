@@ -1,55 +1,48 @@
 /**
  * core/pdfHandler.js
  * Responsável por extrair texto de PDFs e preparar para a IA.
- * Usa pdf.js (carregado via CDN ou bundled) para extração local.
- *
- * INTERFACE PÚBLICA:
- *   pdfHandler.extrairTexto(base64) → Promise<string>
- *   pdfHandler.prepararChunks(textos, limiteTokens) → string[]
- *   pdfHandler.extrairJSON(textoBruto) → Object
- *
- * ETAPA ATUAL (1 - Scaffolding): Estrutura com stubs.
- * A extração real com pdf.js será implementada na Etapa 5.
+ * Usa pdf.js (carregado localmente) para extração sem depender de internet.
  */
 
 const pdfHandler = (() => {
 
-  // Limite conservador do Gemini Nano (~3500 tokens para deixar margem ao prompt)
   const LIMITE_TOKENS_PADRAO = 3500;
 
-  /**
-   * Extrai o texto completo de um PDF em base64.
-   * STUB: retorna string vazia até Etapa 5.
-   *
-   * @param {string} base64 - PDF em base64
-   * @returns {Promise<string>}
-   */
   async function extrairTexto(base64) {
-    // TODO (Etapa 5): Implementar com pdf.js
-    // const pdfData = atob(base64);
-    // const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
-    // ...
-    console.warn("[pdfHandler] extrairTexto: stub — Etapa 5 implementará pdf.js");
-    return "";
+    try {
+      // Configurar o caminho do worker do PDF.js para o ficheiro local
+      pdfjsLib.GlobalWorkerOptions.workerSrc = '../lib/pdf.worker.min.js';
+
+      const pdfData = atob(base64);
+      const loadingTask = pdfjsLib.getDocument({ data: pdfData });
+      const pdf = await loadingTask.promise;
+
+      let textoCompleto = '';
+
+      for (let numPagina = 1; numPagina <= pdf.numPages; numPagina++) {
+        const pagina = await pdf.getPage(numPagina);
+        const conteudo = await pagina.getTextContent();
+        const textoPagina = conteudo.items.map(item => item.str).join(' ');
+        textoCompleto += textoPagina + '\n\n';
+      }
+
+      console.log(`[pdfHandler] Extraídas ${pdf.numPages} páginas com sucesso.`);
+      return textoCompleto.trim();
+
+    } catch (erro) {
+      console.error('[pdfHandler] Erro ao extrair texto do PDF:', erro);
+      throw new Error('Falha ao processar o PDF localmente. Verifique se a biblioteca pdf.js está na pasta lib.');
+    }
   }
 
-  /**
-   * Divide textos longos em chunks que cabem na janela de contexto da IA.
-   *
-   * @param {string[]} textos - Array de textos extraídos de cada PDF
-   * @param {number} limiteTokens
-   * @returns {string[]} - Array de chunks prontos para enviar à IA
-   */
   function prepararChunks(textos, limiteTokens = LIMITE_TOKENS_PADRAO) {
     const textoCompleto = textos.join("\n\n--- PRÓXIMO DOCUMENTO ---\n\n");
-    // Heurística: ~4 caracteres por token
     const limiteCars = limiteTokens * 4;
 
     if (textoCompleto.length <= limiteCars) {
       return [textoCompleto];
     }
 
-    // Divide em chunks com overlap para não perder contexto nas bordas
     const overlap = 200;
     const chunks = [];
     let inicio = 0;
@@ -63,13 +56,6 @@ const pdfHandler = (() => {
     return chunks;
   }
 
-  /**
-   * Limpa e extrai o JSON válido de uma resposta bruta da IA.
-   * Reutiliza a lógica atual de extrairELimparJSON do popup.js.
-   *
-   * @param {string} textoBruto
-   * @returns {Object}
-   */
   function extrairJSON(textoBruto) {
     let textoLimpo = textoBruto
       .replace(/\[cite[^\]]*\]/gi, "")

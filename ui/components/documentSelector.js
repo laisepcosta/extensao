@@ -100,9 +100,7 @@ const documentSelector = (() => {
                 data-doc-url="${doc.url}"
                 ${checkedDoc}
                 style="width:12px;height:12px;margin:0;cursor:pointer;flex-shrink:0;">
-              <img src="../infra_css/imagens/pdf.gif"
-                onerror="this.style.display='none'"
-                style="width:14px;height:14px;" alt="PDF">
+              📄
               ${doc.label || doc.nome}
             </label>`;
       });
