@@ -22,9 +22,9 @@
 // ================================================================
 
 let estadoApp = {
-  jsonBruto:       null,
-  inputs:          null,
-  templateId:      'cessao-credito',
+  jsonBruto: null,
+  inputs: null,
+  templateId: 'cessao-credito',
   dadosPrecatorio: ''
 };
 
@@ -33,22 +33,22 @@ let estadoApp = {
 // ================================================================
 
 function validarDestaquesRealTime() {
-  const painel      = document.getElementById('painelAlertaDestaque');
-  const displayMsg  = document.getElementById('msgAlertaUnificada');
-  const areaCheck   = document.getElementById('areaCheckPerda');
+  const painel = document.getElementById('painelAlertaDestaque');
+  const displayMsg = document.getElementById('msgAlertaUnificada');
+  const areaCheck = document.getElementById('areaCheckPerda');
   const areaDecisao = document.getElementById('areaDecisaoDivergencia');
-  const checkPerda  = document.getElementById('certificarPerdaObjeto');
+  const checkPerda = document.getElementById('certificarPerdaObjeto');
 
   if (!painel || !estadoApp.jsonBruto) return;
 
-  const inst     = estadoApp.jsonBruto.requerimento_cessao?.instrumento_cessao || {};
+  const inst = estadoApp.jsonBruto.requerimento_cessao?.instrumento_cessao || {};
   const ressalva = parseFloat(inst.ressalva_honorarios?.percentual_contratuais) || 0;
 
-  const previoPerc  = parseFloat(document.getElementById('percDestaquePrevio')?.value) || 0;
-  const novoPerc    = parseFloat(document.getElementById('percDeferidoAgora')?.value)  || 0;
-  const previoNome  = document.getElementById('beneficiarioDestaquePrevio')?.value.trim().toLowerCase() || '';
-  const novoNome    = document.getElementById('beneficiarioDestaqueNovo')?.value.trim().toLowerCase() || '';
-  const perdaCert   = checkPerda?.checked || false;
+  const previoPerc = parseFloat(document.getElementById('percDestaquePrevio')?.value) || 0;
+  const novoPerc = parseFloat(document.getElementById('percDeferidoAgora')?.value) || 0;
+  const previoNome = document.getElementById('beneficiarioDestaquePrevio')?.value.trim().toLowerCase() || '';
+  const novoNome = document.getElementById('beneficiarioDestaqueNovo')?.value.trim().toLowerCase() || '';
+  const perdaCert = checkPerda?.checked || false;
 
   const ehDuplicado = (
     previoPerc > 0 && novoPerc > 0 &&
@@ -56,8 +56,8 @@ function validarDestaquesRealTime() {
     previoNome !== '' && previoNome === novoNome
   );
   const novoEfetivo = perdaCert ? 0 : novoPerc;
-  const soma        = previoPerc + novoEfetivo;
-  const erroMat     = ressalva > 0 && soma !== ressalva;
+  const soma = previoPerc + novoEfetivo;
+  const erroMat = ressalva > 0 && soma !== ressalva;
 
   let msgs = [], mostrarCheck = false, mostrarSelect = false, tipoPainel = '';
 
@@ -87,14 +87,14 @@ function validarDestaquesRealTime() {
     areaDecisao.classList.toggle('hidden', !mostrarSelect);
 
     const estilos = {
-      error:   { bg: '#fff5f5', border: '#dc3545', color: '#721c24' },
+      error: { bg: '#fff5f5', border: '#dc3545', color: '#721c24' },
       warning: { bg: '#fffbef', border: '#ffc107', color: '#856404' },
       success: { bg: '#f4fff6', border: '#28a745', color: '#155724' }
     };
     const e = estilos[tipoPainel] || estilos.warning;
     painel.style.backgroundColor = e.bg;
-    painel.style.borderColor     = e.border;
-    displayMsg.style.color       = e.color;
+    painel.style.borderColor = e.border;
+    displayMsg.style.color = e.color;
   } else {
     painel.classList.add('hidden');
   }
@@ -111,14 +111,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
   const toggleDiv = (checkId, divId) => {
     const check = document.getElementById(checkId);
-    const div   = document.getElementById(divId);
+    const div = document.getElementById(divId);
     if (check && div) {
       check.addEventListener('change', () => div.classList.toggle('hidden', !check.checked));
       div.classList.toggle('hidden', !check.checked);
     }
   };
   toggleDiv('existeDestaquePrevio', 'divDestaquePrevio');
-  toggleDiv('deferidoNestaAnalise',  'divDestaqueNovo');
+  toggleDiv('deferidoNestaAnalise', 'divDestaqueNovo');
 
   document.getElementById('beneficiarioDestaquePrevio')
     ?.addEventListener('input', () => {
@@ -198,7 +198,7 @@ document.addEventListener('DOMContentLoaded', function () {
   document.getElementById('btnConfirmarCertidao')
     ?.addEventListener('click', function () {
       try {
-        const resultado  = processarDecisoes(
+        const resultado = processarDecisoes(
           estadoApp.jsonBruto, estadoApp.inputs
         );
         const htmlMinuta = templateRenderer.renderizarMinuta(
@@ -209,8 +209,8 @@ document.addEventListener('DOMContentLoaded', function () {
         );
         document.getElementById('previaMinuta').innerHTML = htmlMinuta;
         document.getElementById('previaTabela').innerHTML = htmlTabela;
-        document.getElementById('outputMinuta').value     = htmlMinuta;
-        document.getElementById('outputTabela').value     = htmlTabela;
+        document.getElementById('outputMinuta').value = htmlMinuta;
+        document.getElementById('outputTabela').value = htmlTabela;
         mudarPasso(2, 3);
       } catch (erro) {
         console.error('[Assistente] Erro ao gerar minuta:', erro);
@@ -241,13 +241,13 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
   ['percDestaquePrevio', 'percDeferidoAgora', 'beneficiarioDestaquePrevio',
-   'beneficiarioDestaqueNovo', 'certificarPerdaObjeto'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener(
-      el.type === 'checkbox' ? 'change' : 'input',
-      validarDestaquesRealTime
-    );
-  });
+    'beneficiarioDestaqueNovo', 'certificarPerdaObjeto'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener(
+        el.type === 'checkbox' ? 'change' : 'input',
+        validarDestaquesRealTime
+      );
+    });
 });
 
 // ================================================================
@@ -273,19 +273,19 @@ function _ativarModoManual() {
 
 async function _baixarEProcessar(anexos) {
   const btnAnalisar = document.getElementById('btnAnalisarSelecionados');
-  const progresso   = document.getElementById('progressoDownload');
-  const msgProg     = document.getElementById('msgProgresso');
-  const barra       = document.getElementById('barraProgresso');
+  const progresso = document.getElementById('progressoDownload');
+  const msgProg = document.getElementById('msgProgresso');
+  const barra = document.getElementById('barraProgresso');
 
-  btnAnalisar.disabled  = true;
+  btnAnalisar.disabled = true;
   progresso.classList.remove('hidden');
-  msgProg.textContent   = `⏬ Baixando 0/${anexos.length}...`;
-  barra.style.width     = '5%';
+  msgProg.textContent = `⏬ Baixando 0/${anexos.length}...`;
+  barra.style.width = '5%';
 
   const _ouvirProgresso = (msg) => {
     if (msg.tipo === 'PROGRESSO_DOWNLOAD') {
       const pct = Math.round((msg.atual / msg.total) * 80);
-      barra.style.width   = pct + '%';
+      barra.style.width = pct + '%';
       msgProg.textContent = `⏬ Baixando ${msg.atual}/${msg.total}: ${msg.nome}`;
     }
   };
@@ -306,7 +306,7 @@ async function _baixarEProcessar(anexos) {
     estadoApp.arquivosBase64 = resposta.arquivos;
 
     msgProg.textContent = '🧠 Lendo PDFs...';
-    barra.style.width   = '85%';
+    barra.style.width = '85%';
 
     try {
       const textosExtraidos = [];
@@ -321,7 +321,7 @@ async function _baixarEProcessar(anexos) {
       }
 
       msgProg.textContent = '🤖 Analisando com IA local (Gemini Nano)...';
-      barra.style.width   = '90%';
+      barra.style.width = '90%';
 
       const template = await templateLoader.carregar(estadoApp.templateId);
 
@@ -333,28 +333,21 @@ async function _baixarEProcessar(anexos) {
       const onProgressoModelo = (pct) => {
         msgProg.textContent = `⬇️ Baixando modelo Gemini Nano: ${pct}%...`;
       };
-
+ 
+      const onInferencia = (charsGerados) => {
+        msgProg.textContent = `🧠 Analisando documentos... (${charsGerados} chars)`;
+        // Barra de progresso: de 90% até 98% proporcional ao JSON gerado
+        const progEstimado = Math.min(98, 90 + (charsGerados / 3000) * 8);
+        barra.style.width = progEstimado + '%';
+      };
+ 
       const resultadoIA = await aiService.extrair({
         textos:          textosExtraidos,
         promptTemplate:  template.prompt,
         dadosPrecatorio,
-        onProgresso:     onProgressoModelo
+        onProgresso:     onProgressoModelo,
+        onInferencia
       });
-
-      setTimeout(() => {
-        progresso.classList.add('hidden');
-        barra.style.width = '0%';
-      }, 800);
-      btnAnalisar.disabled = false;
-
-      if (resultadoIA.sucesso && resultadoIA.dados) {
-        console.log('[Assistente] IA concluiu com sucesso.');
-        estadoApp.jsonBruto = resultadoIA.dados;
-        mudarPasso(0, 1);
-        _carregarDadosNaTela(estadoApp.jsonBruto);
-      } else {
-        throw new Error(resultadoIA.motivo || 'A IA não retornou dados válidos.');
-      }
 
     } catch (erroIA) {
       console.warn('[Assistente] Falha na IA, ativando modo manual:', erroIA.message);
@@ -377,7 +370,7 @@ async function _baixarEProcessar(anexos) {
   } catch (erro) {
     chrome.runtime.onMessage.removeListener(_ouvirProgresso);
     progresso.classList.add('hidden');
-    barra.style.width    = '0%';
+    barra.style.width = '0%';
     btnAnalisar.disabled = false;
     console.error('[Assistente] Erro no download:', erro);
     alert('Erro ao baixar documentos: ' + erro.message);
@@ -389,7 +382,7 @@ async function _baixarEProcessar(anexos) {
 // ================================================================
 
 async function _verificarIA() {
-  const status    = await aiService.verificarDisponibilidade();
+  const status = await aiService.verificarDisponibilidade();
   const indicador = document.getElementById('statusIA');
   if (!indicador) return;
 
@@ -400,20 +393,127 @@ async function _verificarIA() {
   }
 
   const motivos = {
-    'available':        'disponível',
-    'downloadable':     'modelo não baixado — será iniciado ao analisar',
-    'downloading':      'modelo em download, aguarde e tente novamente',
-    'unavailable':      'indisponível neste dispositivo',
-    'readily':          'disponível',
-    'after-download':   'modelo em download, tente novamente em breve',
-    'no':               'indisponível neste dispositivo',
-    'api_nao_suportada':'Chrome sem suporte — use Chrome 138+ com as flags habilitadas',
+    'available': 'disponível',
+    'downloadable': 'modelo não baixado — será iniciado ao analisar',
+    'downloading': 'modelo em download, aguarde e tente novamente',
+    'unavailable': 'indisponível neste dispositivo',
+    'readily': 'disponível',
+    'after-download': 'modelo em download, tente novamente em breve',
+    'no': 'indisponível neste dispositivo',
+    'api_nao_suportada': 'Chrome sem suporte — use Chrome 138+ com as flags habilitadas',
     'erro_verificacao': 'erro ao verificar disponibilidade'
   };
 
   const detalhe = motivos[status.motivo] || status.motivo;
   indicador.textContent = `🔴 IA local indisponível — ${detalhe}`;
   indicador.style.color = '#dc3545';
+}
+
+// ================================================================
+// PREENCHIMENTO AUTOMÁTICO DOS CAMPOS (Passo 1)
+// ================================================================
+
+/**
+ * Recebe o JSON bruto da IA e preenche os campos do formulário
+ * do Passo 1 automaticamente.
+ *
+ * Mapeamento:
+ *   json.metadados_precatorio  → Seção A (readonly)
+ *   json.requerimento_destaque → Seção C (destaque novo, se houver)
+ *   json.requerimento_cessao.instrumento_cessao.partes.cedentes → Seção D
+ *
+ * @param {Object} json - JSON extraído pela IA (estadoApp.jsonBruto)
+ */
+function preencherCamposIA(json) {
+  if (!json) return;
+
+  // ── A. Identificação do Precatório (readonly) ──────────────────
+  const meta = json.metadados_precatorio || {};
+
+  _setVal('numPrecatorioReal', meta.numero_precatorio);
+  _setVal('naturezaPrec', meta.natureza);
+  _setVal('vencimentoPrec', meta.vencimento);
+  _setVal('procOriginario', meta.processo_judicial_originario);
+  _setVal('procSei', meta.processo_sei);
+  _setVal('procEproc', meta.processo_eproc);
+
+  // ── C. Destaque Novo (se a IA detectou requerimento) ───────────
+  const reqDestaque = json.requerimento_destaque || {};
+  const contrato = reqDestaque.contrato_honorarios || {};
+
+  if (reqDestaque.ha_requerimento === true) {
+    const chkNovo = document.getElementById('deferidoNestaAnalise');
+    if (chkNovo && !chkNovo.checked) {
+      chkNovo.checked = true;
+      chkNovo.dispatchEvent(new Event('change'));
+    }
+
+    _setVal('beneficiarioDestaqueNovo', reqDestaque.beneficiario || contrato.contratante);
+    _setVal('percDeferidoAgora', contrato.percentual_contratuais);
+  }
+
+  // ── D. Legitimidade dos Cedentes ───────────────────────────────
+  atualizarListaCedentes(json);
+
+  console.log('[Assistente] Campos do Passo 1 preenchidos pela IA.');
+}
+
+// ================================================================
+// LISTA DE CEDENTES (Seção D — checkboxes)
+// ================================================================
+
+/**
+ * Renderiza os checkboxes de cedentes no container #containerCedentesCheck.
+ * Cada cedente vem de json.requerimento_cessao.instrumento_cessao.partes.cedentes.
+ *
+ * Regra: marca como checked se e_parte_precatorio === true.
+ *
+ * @param {Object} json - JSON bruto da IA
+ */
+function atualizarListaCedentes(json) {
+  const container = document.getElementById('containerCedentesCheck');
+  if (!container) return;
+
+  const inst = json?.requerimento_cessao?.instrumento_cessao || {};
+  const cedentes = inst.partes?.cedentes || [];
+
+  if (cedentes.length === 0) {
+    container.innerHTML =
+      '<span style="color:#999;font-size:14px;">Nenhum cedente identificado pela IA.</span>';
+    return;
+  }
+
+  let html = '';
+  cedentes.forEach((c, i) => {
+    const nome = c.nome || `Cedente ${i + 1}`;
+    const doc = c.numero_documento
+      ? ` (${c.tipo_documento || 'Doc'}: ${c.numero_documento})`
+      : '';
+    const checked = c.e_parte_precatorio ? 'checked' : '';
+
+    html += `
+      <label style="display:flex;align-items:center;gap:8px;
+        font-size:13px;cursor:pointer;padding:3px 0;">
+        <input type="checkbox" class="check-cedente"
+          data-nome="${nome}"
+          ${checked}
+          style="width:14px;height:14px;margin:0;cursor:pointer;flex-shrink:0;">
+        <span>${nome}${doc}</span>
+      </label>`;
+  });
+
+  container.innerHTML = html;
+}
+
+// ================================================================
+// UTILITÁRIO: setar valor + disparar evento para localStorage
+// ================================================================
+
+function _setVal(id, val) {
+  const el = document.getElementById(id);
+  if (!el || val === undefined || val === null || val === '') return;
+  el.value = String(val);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 // ================================================================
@@ -469,20 +569,30 @@ function configurarCopia(btnId, areaId, label) {
 }
 
 function capturarInputsFinais() {
+  // Coleta os nomes dos cedentes marcados como legítimos
+  const cedentesLegitimos = [];
+  document.querySelectorAll('.check-cedente:checked').forEach(chk => {
+    cedentesLegitimos.push(chk.dataset.nome);
+  });
+
   estadoApp.inputs = {
-    eventoComunicacao:          document.getElementById('eventoComunicacaoCessao')?.value  || '',
-    eventoInstrumento:          document.getElementById('eventoInstrumentoCessao')?.value  || '',
-    existeDestaquePrevio:       document.getElementById('existeDestaquePrevio')?.checked   || false,
-    percDestaquePrevio:         parseFloat(document.getElementById('percDestaquePrevio')?.value) || 0,
-    eventoDestaquePrevio:       document.getElementById('eventoDestaquePrevio')?.value     || '',
+    eventoComunicacao: document.getElementById('eventoComunicacaoCessao')?.value || '',
+    eventoInstrumento: document.getElementById('eventoInstrumentoCessao')?.value || '',
+    dataComunicacao: document.getElementById('dataComunicacaoCessao')?.value || '',
+    existeDestaquePrevio: document.getElementById('existeDestaquePrevio')?.checked || false,
+    percDestaquePrevio: parseFloat(document.getElementById('percDestaquePrevio')?.value) || 0,
+    eventoDestaquePrevio: document.getElementById('eventoDestaquePrevio')?.value || '',
     beneficiarioDestaquePrevio: document.getElementById('beneficiarioDestaquePrevio')?.value || '',
-    deferidoNestaAnalise:       document.getElementById('deferidoNestaAnalise')?.checked   || false,
-    percDeferidoAgora:          parseFloat(document.getElementById('percDeferidoAgora')?.value) || 0,
-    eventoPedidoDestaque:       document.getElementById('eventoPedidoDestaque')?.value     || '',
-    dataPedidoDestaque:         document.getElementById('dataPedidoDestaque')?.value       || '',
-    beneficiarioDestaqueNovo:   document.getElementById('beneficiarioDestaqueNovo')?.value || '',
-    opcaoDivergencia:           document.getElementById('opcaoDivergencia')?.value         || '1',
+    deferidoNestaAnalise: document.getElementById('deferidoNestaAnalise')?.checked || false,
+    percDeferidoAgora: parseFloat(document.getElementById('percDeferidoAgora')?.value) || 0,
+    eventoPedidoDestaque: document.getElementById('eventoPedidoDestaque')?.value || '',
+    dataPedidoDestaque: document.getElementById('dataPedidoDestaque')?.value || '',
+    beneficiarioDestaqueNovo: document.getElementById('beneficiarioDestaqueNovo')?.value || '',
+    opcaoDivergencia: document.getElementById('opcaoDivergencia')?.value || 'INTIMAR',
     inferiorEquivaleTotalidade: document.getElementById('inferiorEquivaleTotalidade')?.checked || false,
-    perdaObjetoCertificada:     document.getElementById('certificarPerdaObjeto')?.checked  || false
+    perdaObjetoCertificada: document.getElementById('certificarPerdaObjeto')?.checked || false,
+    // ↓ CAMPOS NOVOS (necessários para rules.js e renderer.js)
+    cedentesLegitimos,
+    dataComunicacao: document.getElementById('dataComunicacaoCessao')?.value || ''
   };
 }
