@@ -6,7 +6,36 @@
 
 const pdfHandler = (() => {
 
-  const LIMITE_TOKENS_PADRAO = 3500;
+  const LIMITE_TOKENS_PADRAO = 2000; // era 3500, reduzir alivia a memória
+
+  function prepararChunks(textos, limiteTokens = LIMITE_TOKENS_PADRAO) {
+    // Trunca cada texto individualmente antes de concatenar
+    const MAX_CHARS_POR_TEXTO = 8000;
+    const textosLimitados = textos.map(t =>
+      t.length > MAX_CHARS_POR_TEXTO ? t.slice(0, MAX_CHARS_POR_TEXTO) : t
+    );
+
+    const textoCompleto = textosLimitados.join("\n\n--- PRÓXIMO DOCUMENTO ---\n\n");
+    const limiteCars = limiteTokens * 4;
+
+    if (textoCompleto.length <= limiteCars) {
+      return [textoCompleto];
+    }
+
+    const overlap = 200;
+    const chunks = [];
+    let inicio = 0;
+    const MAX_CHUNKS = 10; // segurança contra loop infinito
+
+    while (inicio < textoCompleto.length && chunks.length < MAX_CHUNKS) {
+      const fim = Math.min(inicio + limiteCars, textoCompleto.length);
+      chunks.push(textoCompleto.slice(inicio, fim));
+      inicio = fim - overlap;
+      if (inicio >= fim) break; // evita loop infinito
+    }
+
+    return chunks;
+  }
 
   async function extrairTexto(base64) {
     try {

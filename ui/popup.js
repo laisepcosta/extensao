@@ -1,12 +1,20 @@
 /**
- * ui/popup.js — Etapa 2: integração com eProc + Gemini Nano
+ * ui/popup.js
  *
- * Correções aplicadas:
- *  1. Ponte templateLoader → usa prompt embutido no HTML (id="promptTemplateEmbutido")
- *  2. Ponte ruleEngine     → delega para processarDecisoes() do motorDeRegras.js
- *  3. Ponte templateRenderer → delega para as funções globais existentes
- *  4. _baixarEProcessar   → passa dadosPrecatorio corretamente para aiService.extrair()
- *  5. aiService.extrair() → parâmetro corrigido de 'schema' para 'dadosPrecatorio'
+ * CORREÇÃO: Removidas as pontes de compatibilidade que redeclaravam
+ * templateLoader, ruleEngine e templateRenderer — esses objetos já são
+ * declarados pelos módulos core e estão disponíveis globalmente.
+ *
+ * Ordem de carregamento no HTML (deve ser mantida):
+ *   core/pdfHandler.js
+ *   core/aiService.js
+ *   core/templateLoader.js   ← declara `templateLoader`
+ *   core/ruleEngine.js       ← declara `processarDecisoes`
+ *   core/templateRenderer.js ← declara `templateRenderer`
+ *   templates/cessao-credito/rules.js
+ *   templates/cessao-credito/renderer.js
+ *   ui/components/documentSelector.js
+ *   ui/popup.js              ← apenas consome os módulos acima
  */
 
 // ================================================================
@@ -17,45 +25,80 @@ let estadoApp = {
   jsonBruto:       null,
   inputs:          null,
   templateId:      'cessao-credito',
-  dadosPrecatorio: ''          // preenchido por _receberDadosProcesso ou campo manual
+  dadosPrecatorio: ''
 };
 
 // ================================================================
-// PONTES DE COMPATIBILIDADE
-// Traduzem a interface nova (templateLoader / ruleEngine / templateRenderer)
-// para os módulos já existentes, sem alterar nenhum deles.
+// VALIDAÇÃO EM TEMPO REAL
 // ================================================================
 
-const templateLoader = {
-  carregar: async (_templateId) => {
-    const el = document.getElementById('promptTemplateEmbutido');
-    return {
-      prompt: el ? el.textContent.trim() : ''
+function validarDestaquesRealTime() {
+  const painel      = document.getElementById('painelAlertaDestaque');
+  const displayMsg  = document.getElementById('msgAlertaUnificada');
+  const areaCheck   = document.getElementById('areaCheckPerda');
+  const areaDecisao = document.getElementById('areaDecisaoDivergencia');
+  const checkPerda  = document.getElementById('certificarPerdaObjeto');
+
+  if (!painel || !estadoApp.jsonBruto) return;
+
+  const inst     = estadoApp.jsonBruto.requerimento_cessao?.instrumento_cessao || {};
+  const ressalva = parseFloat(inst.ressalva_honorarios?.percentual_contratuais) || 0;
+
+  const previoPerc  = parseFloat(document.getElementById('percDestaquePrevio')?.value) || 0;
+  const novoPerc    = parseFloat(document.getElementById('percDeferidoAgora')?.value)  || 0;
+  const previoNome  = document.getElementById('beneficiarioDestaquePrevio')?.value.trim().toLowerCase() || '';
+  const novoNome    = document.getElementById('beneficiarioDestaqueNovo')?.value.trim().toLowerCase() || '';
+  const perdaCert   = checkPerda?.checked || false;
+
+  const ehDuplicado = (
+    previoPerc > 0 && novoPerc > 0 &&
+    previoPerc === novoPerc &&
+    previoNome !== '' && previoNome === novoNome
+  );
+  const novoEfetivo = perdaCert ? 0 : novoPerc;
+  const soma        = previoPerc + novoEfetivo;
+  const erroMat     = ressalva > 0 && soma !== ressalva;
+
+  let msgs = [], mostrarCheck = false, mostrarSelect = false, tipoPainel = '';
+
+  if (ehDuplicado) {
+    mostrarCheck = true;
+    if (!perdaCert) {
+      msgs.push('⚠️ <strong>AÇÃO NECESSÁRIA:</strong> Pedido idêntico ao histórico. Certifique a perda de objeto.');
+      tipoPainel = 'warning';
+    } else {
+      msgs.push('✅ <strong>PERDA DE OBJETO CERTIFICADA.</strong> Valor novo desconsiderado da soma.');
+      tipoPainel = 'success';
+    }
+  }
+
+  if (erroMat) {
+    if (!ehDuplicado || perdaCert) {
+      msgs.push(`❌ <strong>DIVERGÊNCIA:</strong> Soma (${soma}%) ≠ Ressalva (${ressalva}%).`);
+      mostrarSelect = true;
+    }
+    tipoPainel = 'error';
+  }
+
+  if (msgs.length > 0) {
+    painel.classList.remove('hidden');
+    displayMsg.innerHTML = msgs.join('<br><br>');
+    areaCheck.classList.toggle('hidden', !mostrarCheck);
+    areaDecisao.classList.toggle('hidden', !mostrarSelect);
+
+    const estilos = {
+      error:   { bg: '#fff5f5', border: '#dc3545', color: '#721c24' },
+      warning: { bg: '#fffbef', border: '#ffc107', color: '#856404' },
+      success: { bg: '#f4fff6', border: '#28a745', color: '#155724' }
     };
+    const e = estilos[tipoPainel] || estilos.warning;
+    painel.style.backgroundColor = e.bg;
+    painel.style.borderColor     = e.border;
+    displayMsg.style.color       = e.color;
+  } else {
+    painel.classList.add('hidden');
   }
-};
-
-const ruleEngine = {
-  processar: (jsonBruto, inputs, _templateId) => {
-    // processarDecisoes() vem de motorDeRegras.js
-    return processarDecisoes(jsonBruto, inputs);
-  }
-};
-
-const templateRenderer = {
-  renderizarCertidao: (jsonBruto, _inputs, _templateId) => {
-    // renderizarCertidaoVisual() vem de renderizarCertidao.js
-    return renderizarCertidaoVisual(jsonBruto);
-  },
-  renderizarMinuta: (jsonBruto, inputs, textos, _templateId) => {
-    // gerarMinutaHTML() vem de gerarMinutaHTML.js
-    return gerarMinutaHTML(jsonBruto, inputs, textos);
-  },
-  renderizarTabela: (tabela, _templateId) => {
-    // gerarTabelaNSCHTML() vem de gerarTabelaNSCHTML.js
-    return gerarTabelaNSCHTML(tabela);
-  }
-};
+}
 
 // ================================================================
 // INICIALIZAÇÃO
@@ -155,8 +198,8 @@ document.addEventListener('DOMContentLoaded', function () {
   document.getElementById('btnConfirmarCertidao')
     ?.addEventListener('click', function () {
       try {
-        const resultado  = ruleEngine.processar(
-          estadoApp.jsonBruto, estadoApp.inputs, estadoApp.templateId
+        const resultado  = processarDecisoes(
+          estadoApp.jsonBruto, estadoApp.inputs
         );
         const htmlMinuta = templateRenderer.renderizarMinuta(
           estadoApp.jsonBruto, estadoApp.inputs, resultado.textos, estadoApp.templateId
@@ -197,7 +240,6 @@ document.addEventListener('DOMContentLoaded', function () {
       }, 2000);
     });
 
-  // Validação em tempo real
   ['percDestaquePrevio', 'percDeferidoAgora', 'beneficiarioDestaquePrevio',
    'beneficiarioDestaqueNovo', 'certificarPerdaObjeto'].forEach(id => {
     const el = document.getElementById(id);
@@ -217,7 +259,6 @@ function _receberDadosProcesso(payload) {
   document.getElementById('painelDocumentos')?.classList.remove('hidden');
   document.getElementById('btnAnalisarSelecionados')?.classList.remove('hidden');
 
-  // Persiste os dados do precatório vindos do eProc para usar no prompt da IA
   estadoApp.dadosPrecatorio = payload.dadosPrecatorio || '';
 
   documentSelector.renderizar(payload);
@@ -245,8 +286,7 @@ async function _baixarEProcessar(anexos) {
     if (msg.tipo === 'PROGRESSO_DOWNLOAD') {
       const pct = Math.round((msg.atual / msg.total) * 80);
       barra.style.width   = pct + '%';
-      msgProg.textContent =
-        `⏬ Baixando ${msg.atual}/${msg.total}: ${msg.nome}`;
+      msgProg.textContent = `⏬ Baixando ${msg.atual}/${msg.total}: ${msg.nome}`;
     }
   };
   chrome.runtime.onMessage.addListener(_ouvirProgresso);
@@ -265,8 +305,6 @@ async function _baixarEProcessar(anexos) {
 
     estadoApp.arquivosBase64 = resposta.arquivos;
 
-    // ── Extração de texto e análise com IA local ──────────────────
-
     msgProg.textContent = '🧠 Lendo PDFs...';
     barra.style.width   = '85%';
 
@@ -282,22 +320,25 @@ async function _baixarEProcessar(anexos) {
         throw new Error('Nenhum texto pôde ser extraído dos PDFs selecionados.');
       }
 
-      msgProg.textContent = '🤖 Analisando com IA local (pode demorar alguns segundos)...';
-      barra.style.width   = '95%';
+      msgProg.textContent = '🤖 Analisando com IA local (Gemini Nano)...';
+      barra.style.width   = '90%';
 
       const template = await templateLoader.carregar(estadoApp.templateId);
 
-      // dadosPrecatorio: prioriza o que veio do eProc (payload);
-      // fallback para o campo manual preenchido pelo usuário no HTML.
       const dadosPrecatorio =
         estadoApp.dadosPrecatorio ||
         document.getElementById('dadosPrecatorioManual')?.value.trim() ||
         '';
 
+      const onProgressoModelo = (pct) => {
+        msgProg.textContent = `⬇️ Baixando modelo Gemini Nano: ${pct}%...`;
+      };
+
       const resultadoIA = await aiService.extrair({
         textos:          textosExtraidos,
         promptTemplate:  template.prompt,
-        dadosPrecatorio                   // parâmetro correto — não 'schema'
+        dadosPrecatorio,
+        onProgresso:     onProgressoModelo
       });
 
       setTimeout(() => {
@@ -353,19 +394,26 @@ async function _verificarIA() {
   if (!indicador) return;
 
   if (status.disponivel) {
-    indicador.textContent = '🟢 IA local disponível';
+    indicador.textContent = '🟢 IA local disponível (Gemini Nano)';
     indicador.style.color = '#28a745';
-  } else {
-    const motivos = {
-      'api_nao_suportada': 'Chrome sem suporte à Prompt API',
-      'after-download':    'modelo em download, tente novamente em breve',
-      'no':                'indisponível neste dispositivo',
-      'erro_verificacao':  'erro ao verificar disponibilidade'
-    };
-    const detalhe = motivos[status.motivo] || status.motivo;
-    indicador.textContent = `🔴 IA local indisponível — ${detalhe}`;
-    indicador.style.color = '#dc3545';
+    return;
   }
+
+  const motivos = {
+    'available':        'disponível',
+    'downloadable':     'modelo não baixado — será iniciado ao analisar',
+    'downloading':      'modelo em download, aguarde e tente novamente',
+    'unavailable':      'indisponível neste dispositivo',
+    'readily':          'disponível',
+    'after-download':   'modelo em download, tente novamente em breve',
+    'no':               'indisponível neste dispositivo',
+    'api_nao_suportada':'Chrome sem suporte — use Chrome 138+ com as flags habilitadas',
+    'erro_verificacao': 'erro ao verificar disponibilidade'
+  };
+
+  const detalhe = motivos[status.motivo] || status.motivo;
+  indicador.textContent = `🔴 IA local indisponível — ${detalhe}`;
+  indicador.style.color = '#dc3545';
 }
 
 // ================================================================
@@ -379,134 +427,6 @@ function _carregarDadosNaTela(json) {
   document.getElementById('jsonInput')?.classList.add('hidden');
   document.getElementById('areaCamposAutopreenchidos')
     ?.scrollIntoView({ behavior: 'smooth' });
-}
-
-function preencherCamposIA(json) {
-  if (!json) return;
-
-  const meta        = json.metadados_precatorio   || {};
-  const reqCessao   = json.requerimento_cessao    || {};
-  const reqDestaque = json.requerimento_destaque  || {};
-  const cont        = reqDestaque.contrato_honorarios || {};
-
-  const set = (id, valor) => {
-    const el = document.getElementById(id);
-    if (el && valor !== undefined && valor !== null && valor !== '') {
-      el.value = valor;
-      el.dispatchEvent(new Event('input'));
-    }
-  };
-
-  set('numPrecatorioReal', meta.numero_precatorio);
-  set('naturezaPrec',      meta.natureza);
-  set('vencimentoPrec',    meta.vencimento);
-  set('procOriginario',    meta.processo_judicial_originario);
-  set('procSei',           meta.processo_sei);
-  set('procEproc',         meta.processo_eproc);
-
-  set('eventoComunicacaoCessao', reqCessao.rastreabilidade_evento?.numero_evento);
-  set('eventoInstrumentoCessao', reqCessao.rastreabilidade_evento?.numero_evento);
-
-  const checkDeferido = document.getElementById('deferidoNestaAnalise');
-  if (reqDestaque.ha_requerimento) {
-    if (checkDeferido && !checkDeferido.checked) {
-      checkDeferido.checked = true;
-      checkDeferido.dispatchEvent(new Event('change'));
-    }
-    set('beneficiarioDestaqueNovo', cont.partes?.contratadas?.[0]?.nome);
-    const percNum = cont.objeto_e_valores?.estipulacao_honorarios?.percentual_numero;
-    if (percNum && percNum > 0) {
-      set('percDeferidoAgora', percNum);
-    } else {
-      const m = cont.objeto_e_valores?.estipulacao_honorarios
-        ?.valor_percentual_literal?.match(/\d+/);
-      if (m) set('percDeferidoAgora', m[0]);
-    }
-    set('eventoPedidoDestaque', reqDestaque.rastreabilidade_evento?.numero_evento);
-  } else {
-    if (checkDeferido?.checked) {
-      checkDeferido.checked = false;
-      checkDeferido.dispatchEvent(new Event('change'));
-    }
-  }
-
-  atualizarListaCedentes(json);
-}
-
-function atualizarListaCedentes(json) {
-  const container = document.getElementById('containerCedentesCheck');
-  if (!container) return;
-  container.innerHTML = '';
-
-  const inst         = json?.requerimento_cessao?.instrumento_cessao || {};
-  const cedentes     = inst.partes?.cedentes || [];
-  const cont         = json?.requerimento_destaque?.contrato_honorarios || {};
-  const nomeBenNovo  = cont.partes?.contratadas?.[0]?.nome?.trim().toLowerCase() || '';
-  const nomeBenPrevio =
-    document.getElementById('beneficiarioDestaquePrevio')?.value.trim().toLowerCase() || '';
-
-  let adicionados = 0;
-
-  cedentes.forEach((cedente, i) => {
-    const nomeCed = cedente.nome.trim().toLowerCase();
-
-    if (nomeCed === nomeBenNovo && nomeCed !== nomeBenPrevio && nomeBenNovo !== '') {
-      const div = document.createElement('div');
-      div.style.cssText = 'font-size:10px;color:#dc3545;margin-bottom:5px;';
-      div.innerHTML =
-        `<s>${cedente.nome}</s> <em>(Bloqueado: apenas expectativa de honorários)</em>`;
-      container.appendChild(div);
-      return;
-    }
-
-    const div = document.createElement('div');
-    div.className      = 'checkbox-group';
-    div.style.marginBottom = '5px';
-    div.innerHTML = `
-      <input type="checkbox" id="cedente_${i}"
-        class="check-cedente-legitimo" data-nome="${cedente.nome}" checked>
-      <label for="cedente_${i}" style="font-size:14px;">${cedente.nome}</label>`;
-    container.appendChild(div);
-    adicionados++;
-  });
-
-  if (adicionados === 0 && cedentes.length > 0) {
-    container.innerHTML =
-      '<span style="color:red;font-size:14px;">Nenhum cedente com crédito válido.</span>';
-  } else if (cedentes.length === 0) {
-    container.innerHTML =
-      '<span style="color:red;font-size:14px;">Nenhum cedente encontrado.</span>';
-  }
-}
-
-// ================================================================
-// CAPTURA DE INPUTS
-// ================================================================
-
-function capturarInputsFinais() {
-  const selecionados = Array.from(
-    document.querySelectorAll('.check-cedente-legitimo:checked')
-  ).map(el => el.getAttribute('data-nome'));
-
-  estadoApp.inputs = {
-    numPrecatorioReal:          document.getElementById('numPrecatorioReal')?.value        || '',
-    cedentesLegitimos:          selecionados,
-    eventoComunicacao:          document.getElementById('eventoComunicacaoCessao')?.value  || '',
-    eventoInstrumento:          document.getElementById('eventoInstrumentoCessao')?.value  || '',
-    dataComunicacao:            document.getElementById('dataComunicacaoCessao')?.value    || '',
-    existeDestaquePrevio:       document.getElementById('existeDestaquePrevio')?.checked   || false,
-    percDestaquePrevio:         parseFloat(document.getElementById('percDestaquePrevio')?.value) || 0,
-    eventoDestaquePrevio:       document.getElementById('eventoDestaquePrevio')?.value     || '',
-    beneficiarioDestaquePrevio: document.getElementById('beneficiarioDestaquePrevio')?.value || '',
-    deferidoNestaAnalise:       document.getElementById('deferidoNestaAnalise')?.checked   || false,
-    percDeferidoAgora:          parseFloat(document.getElementById('percDeferidoAgora')?.value) || 0,
-    eventoPedidoDestaque:       document.getElementById('eventoPedidoDestaque')?.value     || '',
-    dataPedidoDestaque:         document.getElementById('dataPedidoDestaque')?.value       || '',
-    beneficiarioDestaqueNovo:   document.getElementById('beneficiarioDestaqueNovo')?.value || '',
-    opcaoDivergencia:           document.getElementById('opcaoDivergencia')?.value         || '1',
-    inferiorEquivaleTotalidade: document.getElementById('inferiorEquivaleTotalidade')?.checked || false,
-    perdaObjetoCertificada:     document.getElementById('certificarPerdaObjeto')?.checked  || false
-  };
 }
 
 // ================================================================
@@ -539,81 +459,30 @@ function mudarPasso(sai, entra) {
 function configurarCopia(btnId, areaId, label) {
   document.getElementById(btnId)?.addEventListener('click', function () {
     navigator.clipboard.writeText(document.getElementById(areaId).value);
-    this.innerText = '✓ Copiado!';
-    setTimeout(() => { this.innerText = label; }, 2000);
+    this.innerText = `✓ Copiado!`;
+    this.style.backgroundColor = '#28a745';
+    setTimeout(() => {
+      this.innerText = label;
+      this.style.backgroundColor = '';
+    }, 2000);
   });
 }
 
-// ================================================================
-// VALIDAÇÃO EM TEMPO REAL
-// ================================================================
-
-function validarDestaquesRealTime() {
-  const painel      = document.getElementById('painelAlertaDestaque');
-  const displayMsg  = document.getElementById('msgAlertaUnificada');
-  const areaCheck   = document.getElementById('areaCheckPerda');
-  const areaDecisao = document.getElementById('areaDecisaoDivergencia');
-  const checkPerda  = document.getElementById('certificarPerdaObjeto');
-
-  if (!painel || !estadoApp.jsonBruto) return;
-
-  const inst     = estadoApp.jsonBruto.requerimento_cessao?.instrumento_cessao || {};
-  const ressalva = parseFloat(inst.ressalva_honorarios?.percentual_contratuais) || 0;
-
-  const previoPerc  = parseFloat(document.getElementById('percDestaquePrevio')?.value) || 0;
-  const novoPerc    = parseFloat(document.getElementById('percDeferidoAgora')?.value)  || 0;
-  const previoNome  =
-    document.getElementById('beneficiarioDestaquePrevio')?.value.trim().toLowerCase() || '';
-  const novoNome    =
-    document.getElementById('beneficiarioDestaqueNovo')?.value.trim().toLowerCase() || '';
-  const perdaCert   = checkPerda?.checked || false;
-
-  const ehDuplicado = (
-    previoPerc > 0 && novoPerc > 0 &&
-    previoPerc === novoPerc &&
-    previoNome !== '' && previoNome === novoNome
-  );
-  const novoEfetivo = perdaCert ? 0 : novoPerc;
-  const soma        = previoPerc + novoEfetivo;
-  const erroMat     = ressalva > 0 && soma !== ressalva;
-
-  let msgs = [], mostrarCheck = false, mostrarSelect = false, tipoPainel = '';
-
-  if (ehDuplicado) {
-    mostrarCheck = true;
-    if (!perdaCert) {
-      msgs.push('⚠️ <strong>AÇÃO NECESSÁRIA:</strong> Pedido idêntico ao histórico. Certifique a perda de objeto.');
-      tipoPainel = 'warning';
-    } else {
-      msgs.push('✅ <strong>PERDA DE OBJETO CERTIFICADA.</strong> Valor novo desconsiderado da soma.');
-      tipoPainel = 'success';
-    }
-  }
-
-  if (erroMat) {
-    if (!ehDuplicado || perdaCert) {
-      msgs.push(`❌ <strong>DIVERGÊNCIA:</strong> Soma (${soma}%) ≠ Ressalva (${ressalva}%).`);
-      mostrarSelect = true;
-    }
-    tipoPainel = 'error';
-  }
-
-  if (msgs.length > 0) {
-    painel.classList.remove('hidden');
-    displayMsg.innerHTML = msgs.join('<br><br>');
-    areaCheck.classList.toggle('hidden', !mostrarCheck);
-    areaDecisao.classList.toggle('hidden', !mostrarSelect);
-
-    const estilos = {
-      error:   { bg: '#fff5f5', border: '#dc3545', color: '#721c24' },
-      warning: { bg: '#fffbef', border: '#ffc107', color: '#856404' },
-      success: { bg: '#f4fff6', border: '#28a745', color: '#155724' }
-    };
-    const e = estilos[tipoPainel] || estilos.warning;
-    painel.style.backgroundColor = e.bg;
-    painel.style.borderColor     = e.border;
-    displayMsg.style.color       = e.color;
-  } else {
-    painel.classList.add('hidden');
-  }
+function capturarInputsFinais() {
+  estadoApp.inputs = {
+    eventoComunicacao:          document.getElementById('eventoComunicacaoCessao')?.value  || '',
+    eventoInstrumento:          document.getElementById('eventoInstrumentoCessao')?.value  || '',
+    existeDestaquePrevio:       document.getElementById('existeDestaquePrevio')?.checked   || false,
+    percDestaquePrevio:         parseFloat(document.getElementById('percDestaquePrevio')?.value) || 0,
+    eventoDestaquePrevio:       document.getElementById('eventoDestaquePrevio')?.value     || '',
+    beneficiarioDestaquePrevio: document.getElementById('beneficiarioDestaquePrevio')?.value || '',
+    deferidoNestaAnalise:       document.getElementById('deferidoNestaAnalise')?.checked   || false,
+    percDeferidoAgora:          parseFloat(document.getElementById('percDeferidoAgora')?.value) || 0,
+    eventoPedidoDestaque:       document.getElementById('eventoPedidoDestaque')?.value     || '',
+    dataPedidoDestaque:         document.getElementById('dataPedidoDestaque')?.value       || '',
+    beneficiarioDestaqueNovo:   document.getElementById('beneficiarioDestaqueNovo')?.value || '',
+    opcaoDivergencia:           document.getElementById('opcaoDivergencia')?.value         || '1',
+    inferiorEquivaleTotalidade: document.getElementById('inferiorEquivaleTotalidade')?.checked || false,
+    perdaObjetoCertificada:     document.getElementById('certificarPerdaObjeto')?.checked  || false
+  };
 }
