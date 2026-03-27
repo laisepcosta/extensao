@@ -100,35 +100,37 @@ const aiService = (() => {
    * @param {Function} [params.onProgresso]    - Callback de progresso (msg: string)
    * @returns {Promise<{sucesso: boolean, dados?: Object, erro?: string}>}
    */
-  async function extrair({ textos, promptTemplate, dadosPrecatorio = '', onProgresso }) {
+  async function extrair({ arquivosBase64, promptTemplate, dadosPrecatorio = '', onProgresso }) {
     const t0 = performance.now();
 
     if (typeof onProgresso === 'function') {
-      onProgresso('Preparando documentos para análise...');
+      onProgresso('Enviando arquivos e regras para o Gemini...');
     }
 
-    // 1. Monta o payload completo
-    const payload = montarPayload(textos, promptTemplate, dadosPrecatorio);
+    // O texto agora será muito pequeno: só as instruções do seu Gem e os dados do SGP
+    const secaoSGP = dadosPrecatorio.trim()
+      ? `\n\nDADOS DO PRECATÓRIO (SGP):\n\n${dadosPrecatorio.trim()}`
+      : ``;
+      
+    const payloadTexto = promptTemplate + secaoSGP;
 
-    if (typeof onProgresso === 'function') {
-      onProgresso('Enviando para o Gemini Pro (isso pode levar até 1 minuto)...');
-    }
-
-    // 2. Delega ao background.js, que orquestra a aba do Gemini
+    // Delega ao background.js (que abre a aba do Gemini)
     let resposta;
     try {
       resposta = await chrome.runtime.sendMessage({
-        tipo:    'ANALISAR_VIA_GEMINI',
-        payload: payload,
+        tipo: 'ANALISAR_VIA_GEMINI',
+        payload: {
+          texto: payloadTexto,
+          arquivos: arquivosBase64 // Passa os arquivos reais para frente
+        },
       });
     } catch (err) {
-      console.error('[aiService] Erro na comunicação com background:', err);
-      return { sucesso: false, erro: 'Falha na comunicação com o background: ' + err.message };
+      console.error('[aiService] Erro na comunicação:', err);
+      return { sucesso: false, erro: err.message };
     }
 
     const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
 
-    // 3. Trata a resposta
     if (!resposta?.sucesso) {
       console.error(`[aiService] ❌ Gemini falhou em ${elapsed}s:`, resposta?.erro);
       return { sucesso: false, erro: resposta?.erro || 'Resposta inválida do Gemini.' };

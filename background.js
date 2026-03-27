@@ -143,7 +143,7 @@ async function _analisarViaGemini(payload, responder) {
 
     // Abre a aba em background (active: false = não tira foco do usuário)
     const aba = await chrome.tabs.create({
-      url:    'https://gemini.google.com/app',
+      url:    'https://gemini.google.com/gem/0665e9c704a6', // <--- URL DO SEU GEM AQUI
       active: false,
     });
 

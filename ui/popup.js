@@ -284,7 +284,7 @@ async function _baixarEProcessar(anexos) {
 
   const _ouvirProgresso = (msg) => {
     if (msg.tipo === 'PROGRESSO_DOWNLOAD') {
-      const pct = Math.round((msg.atual / msg.total) * 80);
+      const pct = Math.round((msg.atual / msg.total) * 50); // Ajustado para 50% (o resto é o upload)
       barra.style.width = pct + '%';
       msgProg.textContent = `⏬ Baixando ${msg.atual}/${msg.total}: ${msg.nome}`;
     }
@@ -292,6 +292,7 @@ async function _baixarEProcessar(anexos) {
   chrome.runtime.onMessage.addListener(_ouvirProgresso);
 
   try {
+    // 1. Faz o download dos PDFs via background/eproc.js
     const resposta = await chrome.runtime.sendMessage({
       tipo: 'BAIXAR_PDFS',
       anexos
@@ -305,54 +306,28 @@ async function _baixarEProcessar(anexos) {
 
     estadoApp.arquivosBase64 = resposta.arquivos;
 
-    msgProg.textContent = '🧠 Lendo PDFs...';
-    barra.style.width = '85%';
+    msgProg.textContent = '🤖 Enviando PDFs e analisando com a IA (Gemini)...';
+    barra.style.width = '70%';
 
     try {
-      const textosExtraidos = [];
-      for (const arq of resposta.arquivos) {
-        msgProg.textContent = `📄 Lendo texto: ${arq.nome}...`;
-        const texto = await pdfHandler.extrairTexto(arq.base64);
-        if (texto) textosExtraidos.push(texto);
-      }
-
-      if (textosExtraidos.length === 0) {
-        throw new Error('Nenhum texto pôde ser extraído dos PDFs selecionados.');
-      }
-
-      msgProg.textContent = '🤖 Analisando com IA local (Gemini Nano)...';
-      barra.style.width = '90%';
-
       const template = await templateLoader.carregar(estadoApp.templateId);
-
       const dadosPrecatorio =
         estadoApp.dadosPrecatorio ||
         document.getElementById('dadosPrecatorioManual')?.value.trim() ||
         '';
 
-      const onProgressoModelo = (pct) => {
-        msgProg.textContent = `⬇️ Baixando modelo Gemini Nano: ${pct}%...`;
+      const onProgressoModelo = (msg) => {
+        msgProg.textContent = msg;
       };
 
-      const onInferencia = (charsGerados, labelSubTarefa) => {
-        // FIX: Sub-tarefas enviam label em vez de chunkIndex
-        const etapa = typeof labelSubTarefa === 'string'
-          ? labelSubTarefa
-          : `chunk ${labelSubTarefa + 1}`;
-        msgProg.textContent = `🧠 Analisando: ${etapa}... (${charsGerados} chars)`;
-        const progEstimado = Math.min(98, 90 + (charsGerados / 2000) * 8);
-        barra.style.width = progEstimado + '%';
-      };
-
+      // 2. Chama a IA repassando os ARQUIVOS (e não mais o texto extraído)
       const resultadoIA = await aiService.extrair({
-        textos: textosExtraidos,
+        arquivosBase64: resposta.arquivos, // Passando os PDFs baixados
         promptTemplate: template.prompt,
         dadosPrecatorio,
-        onProgresso: onProgressoModelo,
-        onInferencia
+        onProgresso: onProgressoModelo
       });
 
-      // FIX: Tratar resultado da IA (sucesso, parcial, ou falha)
       if (resultadoIA.sucesso) {
         estadoApp.jsonBruto = resultadoIA.dados;
 
@@ -368,17 +343,8 @@ async function _baixarEProcessar(anexos) {
         mudarPasso(0, 1);
         _carregarDadosNaTela(estadoApp.jsonBruto);
 
-        // Aviso se extração incompleta
-        if (resultadoIA.completude && resultadoIA.completude < 0.5) {
-          console.warn('[Assistente] Completude baixa:', resultadoIA.completude);
-          const msgArea = document.createElement('div');
-          msgArea.style.cssText = 'background:#fff3cd;border:1px solid #ffc107;padding:8px;border-radius:4px;margin-top:8px;font-size:12px;';
-          msgArea.innerHTML = '⚠️ <strong>Extração parcial.</strong> A IA preencheu apenas parte dos campos. Revise e complete manualmente antes de prosseguir.';
-          document.getElementById('areaCamposAutopreenchidos')?.prepend(msgArea);
-        }
-
       } else {
-        throw new Error(resultadoIA.motivo || 'IA não retornou dados válidos.');
+        throw new Error(resultadoIA.erro || 'IA não retornou dados válidos.');
       }
 
     } catch (erroIA) {

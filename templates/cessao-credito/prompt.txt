@@ -1,18 +1,392 @@
-Extraia dados dos documentos de cessão de crédito em precatório abaixo. Retorne APENAS um JSON válido, sem markdown, sem comentários.
+Extraia os dados dos documentos abaixo de acordo com suas instruções de sistema. 
+Retorne APENAS um JSON válido, sem markdown (sem ```json), sem comentários e sem nenhuma tag de citação.
 
-REGRAS:
-- Use SOMENTE texto literal dos documentos. Não infira, não presuma.
-- Sem menção expressa = "sem_previsao" ou null.
-- Localização: cláusula exata. Sem certeza = "Localização não especificada — verificar instrumento."
-- Base de cálculo: "BASE_COTA_CEDENTE" se menciona cota-parte/cedente. "BASE_TOTAL_PRECATORIO" se menciona crédito do precatório. "BASE_INDEFINIDA" se ambíguo ou ausente.
-- Superpreferência: só "englobada" com menção expressa a "Superpreferência", "Art. 100 §2º CF" ou "Preferências". Termos genéricos = "sem_previsao".
-- Ressalva honorários: tipo e percentual. Sem menção = "sem_previsao".
-- Cessão exclusiva honorários: "NAO", "CONTRATUAIS", "SUCUMBENCIAIS" ou "PERICIAIS".
-- CPF: 000.000.000-00. CNPJ: 00.000.000/0000-00. OAB: UFXXXXX.
-- ha_requerimento: true se há pedido expresso de destaque, false caso contrário.
+SAÍDA OBRIGATÓRIA (FORMATO JSON):
 
-RETORNE exatamente este JSON preenchido:
-{"metadados_precatorio":{"numero_precatorio":"","natureza":"","vencimento":"","devedor":"","processo_judicial_originario":"","processo_sei":"","processo_eproc":""},"requerimento_cessao":{"checklist_documentos":{"peticao_comunicacao_cessao":{"presente":false,"nome_arquivo":""},"instrumento_cessao":{"presente":false,"nome_arquivo":""},"documentos_cessionario":{"presente":false},"documentos_representacao_cessionario":{"presente":false},"procuracoes":{"presente":false},"termo_renuncia_superpreferencia":{"presente":false},"declaracao_quitacao_honorarios":{"presente":false},"analise_geral":""},"instrumento_cessao":{"partes":{"cedentes":[{"nome":"","tipo_documento":"CPF","numero_documento":"","e_parte_precatorio":false,"analise":"","localizacao":""}],"cessionarios":[{"nome":"","tipo_documento":"CNPJ","numero_documento":"","analise":"","localizacao":""}]},"objeto_economico":{"percentual_instrumento":{"percentual_numero":0,"texto_literal":"","analise":"","localizacao":""},"base_calculo":{"classificacao":"BASE_INDEFINIDA","analise":"","localizacao":""},"indicador_totalidade":{"abrange_totalidade":false,"analise":"","localizacao":""}},"superpreferencia":{"status":"sem_previsao","analise":"","localizacao":""},"ressalva_honorarios":{"tipo":"sem_previsao","percentual_contratuais":0,"localizacao":""},"cessao_exclusiva_honorarios":{"tipo":"NAO"}}},"requerimento_destaque":{"ha_requerimento":false,"beneficiario":"","contrato_honorarios":{"contratante":"","percentual_contratuais":0}},"analise":""}
+{
 
-DADOS DO PRECATÓRIO (SGP):
-[COLE AQUI OS DADOS DO PRECATÓRIO, EX: Precatório Nº: 18931...]
+  "metadados_precatorio": {
+
+    "numero_precatorio": "",
+
+    "natureza": "",
+
+    "vencimento": "",
+
+    "devedor": "",
+
+    "processo_judicial_originario": "",
+
+    "processo_sei": "",
+
+    "processo_eproc": ""
+
+  },
+
+  "requerimento_cessao": {
+
+    "rastreabilidade_evento": {
+
+      "numero_evento": "46",
+
+      "regra_aplicavel": "R1",
+
+      "analise": "Extrair o número do evento pelo nome da pasta/arquivo.",
+
+      "localizacao": ""
+
+    },
+
+    "checklist_documentos": {
+
+      "peticao_comunicacao_cessao": { "presente": false, "nome_arquivo": "" },
+
+      "instrumento_cessao": { "presente": false, "nome_arquivo": "" },
+
+      "documentos_cessionario": { "presente": false, "nome_arquivo": "" },
+
+      "documentos_representacao_cessionario": { "presente": false, "nome_arquivo": "", "regra_aplicavel": "R1", "analise": "Verificar Estatuto/Contrato Social do FIDC/PJ." },
+
+      "procuracoes": { "presente": false, "nomes_arquivos": "" },
+
+      "termo_renuncia_superpreferencia": { "presente": false, "nome_arquivo": "" },
+
+      "declaracao_quitacao_honorarios": { "presente": false, "nome_arquivo": "" },
+
+      "regra_aplicavel": "R1",
+
+      "analise_geral": "Parecer geral sobre a presença dos documentos essenciais para a cessão."
+
+    },
+
+    "peticao_anexa": {
+
+      "pedido_intimacao_exclusiva": {
+
+        "existe_pedido": false,
+
+        "advogados_indicados": [
+
+          {
+
+            "nome": "",
+
+            "oab": ""
+
+          }
+
+        ],
+
+        "procuracao_valida_anexada": false,
+
+        "regra_aplicavel": "R1, R8",
+
+        "analise": "Verificar pedido expresso de intimação para um ou mais advogados e a validade da procuração para todos eles.",
+
+        "localizacao": ""
+
+      }
+
+    },
+
+    "instrumento_cessao": {
+
+      "identificacao_precatorio": {  
+
+        "houve_divergencia": false,
+
+        "regra_aplicavel": "R1",
+
+        "analise_divergencia": "Confrontar precatório no instrumento com metadados.",
+
+        "localizacao": ""
+
+      },
+
+      "formalidades": {
+
+        "data_instrumento": "",
+
+        "assinatura_cedente": false,
+
+        "assinatura_cessionario": false,
+
+        "regra_aplicavel": "R1",
+
+        "analise": "Analisar validade da forma e assinaturas.",
+
+        "localizacao": ""
+
+      },
+
+      "dados_escritura_publica": {
+
+        "lavrado_em_cartorio": false,
+
+        "nome_cartorio": "",
+
+        "livro": "",
+
+        "pagina": "",
+
+        "regra_aplicavel": "R1",
+
+        "analise": "Extrair dados cartorários se for Escritura Pública."
+
+      },
+
+      "partes": {
+
+        "cedentes": [ { "nome": "", "tipo_documento": "", "numero_documento": "", "qualificacao_completa": "", "e_parte_precatorio": true, "regra_aplicavel": "R8", "analise": "Validar qualificação.", "localizacao": "" } ],
+
+        "cessionarios": [ { "nome": "", "tipo_documento": "", "numero_documento": "", "qualificacao_completa": "", "administradora_procuradora": "", "divisao_especificada": "", "representante_legal_assinante": "", "regra_aplicavel": "R8", "analise": "Validar qualificação e poderes do representante.", "localizacao": "" } ],
+
+        "advogados_cedente": [ { "nome": "", "oab": "", "assina_como": "", "regra_aplicavel": "R8", "analise": "Validar OAB.", "localizacao": "" } ],
+
+        "outras_partes": [ { "nome": "", "tipo_documento": "", "numero_documento": "", "qualificacao_completa": "", "papel": "", "regra_aplicavel": "R8", "analise": "Validar anuentes.", "localizacao": "" } ]
+
+      },
+
+      "objeto_economico": {
+
+        "valor_cessao": {
+
+          "forma_pagamento": "",
+
+          "comprovante_pagamento_apresentado": false,
+
+          "regra_aplicavel": "R1",
+
+          "analise": "Analisar pagamento e comprovante.",
+
+          "localizacao": ""
+
+        },
+
+        "percentual_instrumento": {
+
+          "percentual_numero": 0.0,
+
+          "texto_literal": "",
+
+          "regra_aplicavel": "R1",
+
+          "analise": "Interpretar percentual.",
+
+          "localizacao": ""
+
+        },
+
+        "base_calculo": {
+
+          "classificacao": "",
+
+          "regra_aplicavel": "R3",
+
+          "analise": "Aplicar R3 e justificar a base.",
+
+          "localizacao": ""
+
+        },
+
+        "indicador_totalidade": {
+
+          "abrange_totalidade": false,
+
+          "regra_aplicavel": "R3",
+
+          "analise": "Explicar se abrange 100%.",
+
+          "localizacao": ""
+
+        }
+
+      },
+
+      "superpreferencia": {
+
+        "status": "",
+
+        "declaracao_renuncia_expressa": false,
+
+        "regra_aplicavel": "R4",
+
+        "analise": "Aplicar R4 rigorosamente.",
+
+        "localizacao": ""
+
+      },
+
+      "ressalva_honorarios": {
+
+        "tipo": "",
+
+        "percentual_contratuais": 0.0,
+
+        "percentual_periciais": 0.0,
+
+        "regra_aplicavel": "R5",
+
+        "analise": "Aplicar R5 rigorosamente.",
+
+        "localizacao": ""
+
+      },
+
+      "declaracao_quitacao_honorarios": {
+
+        "apresentada": false,
+
+        "assinada_por": "",
+
+        "regra_aplicavel": "R1",
+
+        "analise": "Verificar quitação.",
+
+        "localizacao": ""
+
+      },
+
+      "cessao_exclusiva_honorarios": {
+
+        "tipo": "NAO",
+
+        "regra_aplicavel": "R6",
+
+        "analise": "Aplicar R6.",
+
+        "localizacao": ""
+
+      }
+
+    }
+
+  },
+
+  "requerimento_destaque": {
+
+    "ha_requerimento": false,
+
+    "regra_aplicavel": "R10",
+
+    "rastreabilidade_evento": {
+
+      "numero_evento": "47",
+
+      "regra_aplicavel": "R1",
+
+      "analise": "Extrair o número do evento."
+
+    },
+
+    "checklist_documentos": {
+
+      "peticao_destaque_honorarios": { "presente": false, "nome_arquivo": "" },
+
+      "contrato_honorarios": { "presente": false, "nome_arquivo": "" },
+
+      "regra_aplicavel": "R1",
+
+      "analise_geral": "Parecer sobre documentos do destaque."
+
+    },
+
+    "peticao_anexa": {
+
+      "pedido_intimacao_exclusiva": {
+
+        "existe_pedido": false,
+
+        "advogados_indicados": [
+
+          {
+
+            "nome": "",
+
+            "oab": ""
+
+          }
+
+        ],
+
+        "procuracao_valida_anexada": false,
+
+        "regra_aplicavel": "R1, R8",
+
+        "analise": "Verificar se na petição de requerimento de destaque há pedido para intimações exclusivas, listando todos os advogados indicados e a OAB.",
+
+        "localizacao": ""
+
+      }
+
+    },
+
+    "contrato_honorarios": {
+
+      "formalidades_instrumento": {
+
+        "data_contrato": { "data_celebracao": "", "localizacao": "" },
+
+        "assinaturas": {
+
+          "assinatura_cliente_presente": false,
+
+          "assinatura_advogado_presente": false,
+
+          "tipo_assinatura_identificado": "",
+
+          "regra_aplicavel": "R1",
+
+          "analise_manifestacao_vontade": "Analisar validade das assinaturas.",
+
+          "localizacao": ""
+
+        }
+
+      },
+
+      "partes": {
+
+        "contratantes": [ { "nome": "", "tipo_documento": "", "numero_documento": "", "representantes": "", "e_parte_precatorio": true, "regra_aplicavel": "R8", "analise": "Analisar qualificação.", "localizacao": "" } ],
+
+        "contratadas": [ { "nome": "", "tipo_documento": "", "numero_documento": "", "oab_uf": "", "representantes": "", "regra_aplicavel": "R8", "analise": "Analisar regularidade.", "localizacao": "" } ],
+
+        "outras_partes": [ { "nome": "", "tipo_documento": "", "numero_documento": "", "papel": "", "regra_aplicavel": "R8", "analise": "Avaliar intervenientes.", "localizacao": "" } ]
+
+      },
+
+      "objeto_e_valores": {
+
+        "objeto_contrato": { "nexo_processo_originario": false, "regra_aplicavel": "R1", "analise": "Avaliar nexo.", "localizacao": "" },
+
+        "estipulacao_honorarios": { "possui_percentual_ou_valor_expresso": false, "valor_percentual_literal": "", "percentual_numero": 0.0, "regra_aplicavel": "R1", "analise": "Analisar clareza da cláusula.", "localizacao": "" }
+
+      },
+
+      "relacoes_patronais": {
+
+        "multiplos_advogados": { "identificados": false, "regra_aplicavel": "R1", "analise": "Verificar pluralidade.", "localizacao": "" },
+
+        "renuncia_co_patronos": { "existe_renuncia": false, "regra_aplicavel": "R1", "analise": "Verificar renúncia.", "localizacao": "" },
+
+        "divisao_honorarios": { "previsao_expressa": false, "regra_aplicavel": "R1", "analise": "Verificar divisão.", "localizacao": "" }
+
+      },
+
+      "tributacao_pagamento": {
+
+        "pedido_pagamento_pj": false,
+
+        "regra_aplicavel": "R7",
+
+        "analise_compatibilidade_pf_pj": "Aplicar R7.",
+
+        "localizacao": ""
+
+      }
+
+    }
+
+  }
+
+}
