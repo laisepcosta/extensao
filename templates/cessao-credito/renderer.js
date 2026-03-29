@@ -1,215 +1,412 @@
 /**
- * templates/cessao-credito/renderer.js
- * Renderizadores HTML específicos para cessão de crédito.
- * Migrado de renderizarCertidao.js + gerarMinutaHTML.js + gerarTabelaNSCHTML.js.
+ * templates/cessao-credito/renderer.js  v5.0
  *
- * CONTRATO: Registra window.templateRenderer_cessao_credito com:
- *   .certidao(dadosIA, inputs) → HTML
- *   .minuta(dadosIA, inputs, textos) → HTML
- *   .tabela(dados) → HTML
+ * REVISÃO POR SEÇÃO:
+ *  - Cada seção da certidão tem botão "Confirmar esta seção" no rodapé
+ *  - Seção confirmada: colapsa, cabeçalho fica verde com selo ✓
+ *  - Botão global "Gerar Minuta" só ativa quando TODAS as seções confirmadas
+ *  - Ao voltar, todas as confirmações são resetadas
  */
 
-// ── Helpers compartilhados ─────────────────────────────────────────────────
-function _criarLinha(aspecto, analise, loc) {
-  return `<tr>
-    <td style="font-weight:bold;border:1px solid #ccc;padding:8px;word-wrap:break-word;background:#fdfdfd;">${aspecto}</td>
-    <td style="border:1px solid #ccc;padding:8px;word-wrap:break-word;line-height:1.5;">${analise || '-'}</td>
-    <td style="font-size:13px;color:#555;border:1px solid #ccc;padding:8px;word-wrap:break-word;font-style:italic;">${loc || 'N/I'}</td>
-  </tr>`;
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function _ok(val) {
+  return val ? '<span class="icon-ok">✓ Sim</span>' : '<span class="icon-err">✗ Não</span>';
 }
 
-function _checkIcon(val) {
-  return val
-    ? '<span style="color:green;font-weight:bold;">✅ SIM</span>'
-    : '<span style="color:red;font-weight:bold;">❌ NÃO</span>';
+function _badge(texto, tipo = 'blue') {
+  return `<span class="badge badge-${tipo}">${texto || '—'}</span>`;
 }
 
-function _renderizarParte(p) {
-  const id = p.numero_documento
-    ? `${p.tipo_documento || 'Doc'}: ${p.numero_documento}`
-    : (p.oab || p.oab_uf ? `OAB: ${p.oab || p.oab_uf}` : 'N/I');
-  return `<strong>${p.nome || '-'}</strong> (${id})`;
+function _tagDiv(texto, tipo = 'ok') {
+  return `<span class="tag-div tag-${tipo}">${texto}</span>`;
+}
+
+function _linha(aspecto, analise, loc = '') {
+  return `
+  <div class="conf-linha">
+    <div class="conf-aspecto">${aspecto}</div>
+    <div class="conf-analise">${analise || '—'}</div>
+    <div class="conf-loc">${loc || ''}</div>
+  </div>`;
 }
 
 function _limparNome(nome) {
-  if (!nome) return '-';
+  if (!nome) return '—';
   return nome.replace(/^[\d.\-]+[_\-]?/, '');
 }
 
-// ── Certidão de Conferência ────────────────────────────────────────────────
-function _certidao(json, inputs) {
-  const meta       = json?.metadados_precatorio || {};
-  const reqCessao  = json?.requerimento_cessao  || {};
-  const inst       = reqCessao.instrumento_cessao || {};
-  const reqDestaque= json?.requerimento_destaque || {};
-  const cont       = reqDestaque.contrato_honorarios || {};
+function _renderParte(p) {
+  if (!p) return '—';
+  const id = p.numero_documento
+    ? `<span class="badge badge-blue" style="font-family:var(--font-mono);font-size:9px;">${p.tipo_documento || 'Doc'} ${p.numero_documento}</span>`
+    : (p.oab || p.oab_uf ? `<span class="badge badge-gold">OAB ${p.oab || p.oab_uf}</span>` : '');
+  return `<strong>${p.nome || '—'}</strong> ${id}`;
+}
 
-  let html = `<table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:14px;">
-    <tr style="background:#343a40;color:white;">
-      <th style="width:25%;padding:8px;border:1px solid #ccc;">Aspecto</th>
-      <th style="width:55%;padding:8px;border:1px solid #ccc;">Análise IA / Dados Extraídos</th>
-      <th style="width:20%;padding:8px;border:1px solid #ccc;">Localização</th>
-    </tr>`;
+// ── Seção com confirmação obrigatória no rodapé ────────────────────────────
+
+function _secaoComRevisao(id, titulo, cor, conteudo) {
+  return `
+  <div class="conf-secao" id="secao-${id}" data-status="pendente">
+
+    <div class="conf-secao-header ${cor}" id="header-${id}" onclick="toggleSecaoRevisao('${id}')">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="secao-status-icon" id="icon-${id}">▾</span>
+        <span>${titulo}</span>
+      </div>
+      <span class="secao-confirmada-badge hidden" id="badge-${id}">✓ Confirmada</span>
+    </div>
+
+    <div class="conf-secao-body" id="body-${id}">
+      <div class="conf-secao-conteudo">
+        ${conteudo}
+      </div>
+      <div class="secao-confirmar-wrap" id="confirmar-wrap-${id}">
+        <div class="secao-confirmar-hint">
+          Leia os dados acima e confirme esta seção para continuar
+        </div>
+        <button class="secao-btn-confirmar" id="btn-confirmar-${id}"
+          onclick="confirmarSecao('${id}')">
+          ✓ &nbsp;Confirmar esta seção
+        </button>
+      </div>
+    </div>
+
+  </div>`;
+}
+
+// ── Certidão ───────────────────────────────────────────────────────────────
+
+function _certidao(json, inputs) {
+  const meta        = json?.metadados_precatorio || {};
+  const reqCessao   = json?.requerimento_cessao  || {};
+  const inst        = reqCessao.instrumento_cessao || {};
+  const reqDestaque = json?.requerimento_destaque || {};
+  const chk         = reqCessao.checklist_documentos || {};
+  const objEcon     = inst.objeto_economico || {};
+  const ressalva    = inst.ressalva_honorarios || {};
 
   // DADOS DO PRECATÓRIO
-  html += `<tr><td colspan="3" style="background:#e9ecef;font-weight:bold;padding:8px;border:1px solid #ccc;text-align:center;">DADOS DO PRECATÓRIO</td></tr>`;
-  html += _criarLinha("Identificação",
-    `<em>Nº (GV):</em> <strong>${meta.numero_precatorio || '-'}</strong><br><em>Natureza:</em> ${meta.natureza || '-'}<br><em>Vencimento:</em> ${meta.vencimento || '-'}`,
-    "SGP/TJMG");
-  html += _criarLinha("Devedor", meta.devedor || '-', "SGP/TJMG");
-  html += _criarLinha("Processos",
-    `<strong>Originário:</strong> ${meta.processo_judicial_originario || '-'}<br><strong>SEI:</strong> ${meta.processo_sei || '-'}<br><strong>Eproc:</strong> ${meta.processo_eproc || '-'}`,
-    "SGP/TJMG");
+  const cDados = `
+    ${_linha('Número (GV)',
+      `<strong style="font-family:var(--font-mono);font-size:14px;">${meta.numero_precatorio || '—'}</strong>`,
+      'SGP/TJMG')}
+    ${_linha('Natureza / Vencimento',
+      `${_badge(meta.natureza || '—', 'blue')} &nbsp; ${meta.vencimento || '—'}`,
+      'SGP/TJMG')}
+    ${_linha('Devedor', meta.devedor || '—', 'SGP/TJMG')}
+    ${_linha('Processos',
+      `<div style="display:flex;flex-direction:column;gap:3px;">
+        <span><strong>Originário:</strong> ${meta.processo_judicial_originario || '—'}</span>
+        <span><strong>SEI:</strong> ${meta.processo_sei || '—'}</span>
+        <span><strong>Eproc:</strong> ${meta.processo_eproc || '—'}</span>
+      </div>`, 'SGP/TJMG')}
+    ${_linha('Destaque prévio',
+      inputs.existeDestaquePrevio
+        ? `${_tagDiv('SIM', 'warn')} &nbsp; <strong>${inputs.percDestaquePrevio || 0}%</strong>
+           — ${inputs.beneficiarioDestaquePrevio || 'N/I'}
+           &nbsp; ${_badge('Ev. ' + (inputs.eventoDestaquePrevio || '—'), 'blue')}`
+        : _tagDiv('Não', 'ok'), 'Input')}`;
 
-  const infoDestaquePrevio = inputs.existeDestaquePrevio
-    ? `<strong style="color:#0056b3;">SIM</strong><br><em>%:</em> ${inputs.percDestaquePrevio || 0}%<br><em>Beneficiário:</em> ${inputs.beneficiarioDestaquePrevio || 'N/I'}<br><em>Evento:</em> ${inputs.eventoDestaquePrevio || 'N/I'}`
-    : `<strong>NÃO</strong>`;
-  html += _criarLinha("Destaque Prévio", infoDestaquePrevio, "Painel de Inputs");
+  // DOCUMENTOS E CHECKLIST
+  const docsItens = [
+    ['Petição / Comunicação',     chk.peticao_comunicacao_cessao],
+    ['Instrumento de Cessão',     chk.instrumento_cessao],
+    ['Docs do Cessionário',       chk.documentos_cessionario],
+    ['Rep. do Cessionário',       chk.documentos_representacao_cessionario],
+    ['Procurações',               chk.procuracoes],
+    ['Renúncia Superpreferência', chk.termo_renuncia_superpreferencia],
+    ['Quitação de Honorários',    chk.declaracao_quitacao_honorarios],
+  ];
+  const listaCheck = docsItens.map(([label, item]) => `
+    <li>
+      <span>${_ok(item?.presente)}</span>
+      <span class="lbl">${label}</span>
+      <span style="color:var(--text-muted);font-size:11px;margin-left:4px;">
+        ${_limparNome(item?.nome_arquivo || item?.nomes_arquivos)}
+      </span>
+    </li>`).join('');
+  const intimExcl = reqCessao.peticao_anexa?.pedido_intimacao_exclusiva;
+  const cDocs = `
+    ${_linha('Checklist',
+      `<ul class="checklist">${listaCheck}</ul>
+       <div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--gray-200);font-size:11px;color:var(--text-muted);">
+         <strong>Parecer IA:</strong> ${chk.analise_geral || '—'}
+       </div>`, 'Anexos')}
+    ${_linha('Intimação exclusiva',
+      intimExcl?.existe_pedido
+        ? `${_tagDiv('Sim', 'warn')} — ${(intimExcl.advogados_indicados || []).map(a => `${a.nome} (OAB ${a.oab})`).join(', ')} · Procuração: ${_ok(intimExcl.procuracao_valida_anexada)}`
+        : _tagDiv('Não', 'ok'),
+      intimExcl?.localizacao || 'Petição')}
+    ${_linha('Eventos',
+      `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+        ${_badge('Ev. Comunicação: ' + (inputs.eventoComunicacao || '—'), 'blue')}
+        ${_badge('Ev. Instrumento: ' + (inputs.eventoInstrumento || '—'), 'blue')}
+        ${inputs.dataComunicacao ? _badge('Data: ' + inputs.dataComunicacao, 'gold') : ''}
+      </div>`, 'Input')}`;
 
-  // REQUERIMENTO DE CESSÃO
-  html += `<tr><td colspan="3" style="background:#d1ecf1;font-weight:bold;padding:8px;border:1px solid #ccc;text-align:center;">REQUERIMENTO DE CESSÃO</td></tr>`;
-  html += _criarLinha("Eventos",
-    `<strong>Comunicação:</strong> Ev. ${inputs.eventoComunicacao || '-'}<br><strong>Instrumento:</strong> Ev. ${inputs.eventoInstrumento || '-'}<br><strong>Data:</strong> ${inputs.dataComunicacao || '-'}`,
-    "Painel de Inputs");
+  // PARTES E INSTRUMENTO
+  const cedentes    = inst.partes?.cedentes    || [];
+  const cessionarios = inst.partes?.cessionarios || [];
+  const formalidades = inst.formalidades || {};
+  const cPartes = `
+    ${_linha('Cedente(s)',
+      cedentes.length
+        ? cedentes.map(c => `
+            <div style="padding:4px 0;border-bottom:1px dashed var(--gray-200);">
+              ${_renderParte(c)}
+              <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">
+                Parte no prec.: ${_ok(c.e_parte_precatorio)}
+                ${c.analise ? ` · ${c.analise}` : ''}
+              </div>
+            </div>`).join('')
+        : '<span style="color:var(--text-muted)">Nenhum identificado</span>',
+      cedentes[0]?.localizacao || '')}
+    ${_linha('Cessionário(s)',
+      cessionarios.length
+        ? cessionarios.map(c => `
+            <div style="padding:4px 0;border-bottom:1px dashed var(--gray-200);">
+              ${_renderParte(c)}
+              <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">${c.analise || ''}</div>
+            </div>`).join('')
+        : '<span style="color:var(--text-muted)">Nenhum identificado</span>',
+      cessionarios[0]?.localizacao || '')}
+    ${_linha('Formalidades',
+      `Data: <strong>${formalidades.data_instrumento || '—'}</strong>
+       &nbsp; Assin. cedente: ${_ok(formalidades.assinatura_cedente)}
+       &nbsp; Assin. cessionário: ${_ok(formalidades.assinatura_cessionario)}
+       <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">${formalidades.analise || ''}</div>`,
+      formalidades.localizacao || '')}
+    ${inst.dados_escritura_publica?.lavrado_em_cartorio
+      ? _linha('Escritura Pública',
+          `${inst.dados_escritura_publica.nome_cartorio || '—'} · Livro ${inst.dados_escritura_publica.livro || '—'} · Pág. ${inst.dados_escritura_publica.pagina || '—'}`, '')
+      : ''}`;
 
-  const chk = reqCessao.checklist_documentos || {};
-  const listaChk = `<ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.8;">
-    <li><strong>Petição:</strong> ${_checkIcon(chk.peticao_comunicacao_cessao?.presente)} <em>(${_limparNome(chk.peticao_comunicacao_cessao?.nome_arquivo)})</em></li>
-    <li><strong>Instrumento:</strong> ${_checkIcon(chk.instrumento_cessao?.presente)} <em>(${_limparNome(chk.instrumento_cessao?.nome_arquivo)})</em></li>
-    <li><strong>Docs Cessionário:</strong> ${_checkIcon(chk.documentos_cessionario?.presente)}</li>
-    <li><strong>Rep. Cessionário:</strong> ${_checkIcon(chk.documentos_representacao_cessionario?.presente)}</li>
-    <li><strong>Procurações:</strong> ${_checkIcon(chk.procuracoes?.presente)}</li>
-    <li><strong>Renúncia Superprefer.:</strong> ${_checkIcon(chk.termo_renuncia_superpreferencia?.presente)}</li>
-    <li><strong>Quitação Honorários:</strong> ${_checkIcon(chk.declaracao_quitacao_honorarios?.presente)}</li>
-  </ul><hr style="margin:8px 0;border:0;border-top:1px dashed #ccc;">
-  <em>Parecer:</em> ${chk.analise_geral || '-'}`;
-  html += _criarLinha("Checklist Documentos", listaChk, "Visão Geral do Anexo");
-
-  // PARTES
-  html += `<tr><td colspan="3" style="background:#d1ecf1;font-weight:bold;padding:8px;border:1px solid #ccc;text-align:center;">PARTES</td></tr>`;
-
-  const cedentes = (inst.partes?.cedentes || []).map(c =>
-    `${_renderizarParte(c)}<br><em>Parte no Prec.:</em> ${c.e_parte_precatorio ? 'SIM' : 'NÃO'}<br><em>Análise:</em> ${c.analise || '-'}`
-  ).join("<br><hr style='margin:5px 0;border:0;border-top:1px dashed #ccc;'><br>") || "Nenhum identificado";
-  html += _criarLinha("Cedente(s)", cedentes, inst.partes?.cedentes?.[0]?.localizacao);
-
-  const cessionarios = (inst.partes?.cessionarios || []).map(c =>
-    `${_renderizarParte(c)}<br><em>Análise:</em> ${c.analise || '-'}`
-  ).join("<br><hr style='margin:5px 0;border:0;border-top:1px dashed #ccc;'><br>") || "Nenhum identificado";
-  html += _criarLinha("Cessionário(s)", cessionarios, inst.partes?.cessionarios?.[0]?.localizacao);
-
-  // OBJETO ECONÔMICO
-  html += `<tr><td colspan="3" style="background:#d4edda;font-weight:bold;padding:8px;border:1px solid #ccc;text-align:center;">OBJETO ECONÔMICO E EFEITOS JURÍDICOS</td></tr>`;
-
-  const objEcon = inst.objeto_economico || {};
-  html += _criarLinha("Percentual Cedido",
-    `<strong>${objEcon.percentual_instrumento?.percentual_numero || 0}%</strong><br><em>Literal:</em> ${objEcon.percentual_instrumento?.texto_literal || 'N/I'}<br><em>Análise:</em> ${objEcon.percentual_instrumento?.analise || '-'}`,
-    objEcon.percentual_instrumento?.localizacao);
-
-  html += _criarLinha("Base de Cálculo",
-    `<em>Classificação:</em> <strong>${objEcon.base_calculo?.classificacao || 'BASE_INDEFINIDA'}</strong><br><em>Análise:</em> ${objEcon.base_calculo?.analise || 'N/I'}`,
-    objEcon.base_calculo?.localizacao);
-
-  html += _criarLinha("Superpreferência",
-    `<em>Status:</em> <strong>${inst.superpreferencia?.status || 'sem_previsao'}</strong><br><em>Análise:</em> ${inst.superpreferencia?.analise || 'N/I'}`,
-    inst.superpreferencia?.localizacao);
-
-  const ressalva = inst.ressalva_honorarios || {};
+  // OBJETO ECONÔMICO E EFEITOS
   const ressalvaNum = parseFloat(ressalva.percentual_contratuais) || 0;
   const percPrevio  = parseFloat(inputs.percDestaquePrevio) || 0;
   const percNovo    = inputs.perdaObjetoCertificada ? 0 : (parseFloat(inputs.percDeferidoAgora) || 0);
   const soma        = percPrevio + percNovo;
-
-  let infoCoer = "";
-  let estiloCoer = "color:green;";
+  let coerenciaTag, coerenciaHtml;
   if (inputs.perdaObjetoCertificada) {
-    infoCoer = `✅ <strong>SOMA AJUSTADA:</strong> Pedido novo ignorado por perda de objeto.<br><em>Cálculo:</em> Histórico (${percPrevio}%) = Ressalva (${ressalvaNum}%)`;
-  } else if (ressalvaNum === soma) {
-    infoCoer = `✅ <strong>COERENTE:</strong> Ressalva (${ressalvaNum}%) = Soma (${soma}%)`;
+    coerenciaTag  = _tagDiv('Perda de objeto certificada', 'warn');
+    coerenciaHtml = `Histórico (${percPrevio}%) = Ressalva (${ressalvaNum}%) — pedido novo desconsiderado.`;
+  } else if (ressalvaNum === 0 || ressalvaNum === soma) {
+    coerenciaTag  = _tagDiv('Coerente', 'ok');
+    coerenciaHtml = `Ressalva (${ressalvaNum}%) = Soma de destaques (${soma}%)`;
   } else {
-    estiloCoer = "color:red;font-weight:bold;";
-    infoCoer = `❌ <strong>DIVERGENTE:</strong><br>Ressalva: ${ressalvaNum}%<br>Soma: ${soma}% (Histórico ${percPrevio}% + Novo ${percNovo}%)<br><strong>DECISÃO:</strong> ${inputs.opcaoDivergencia || 'N/I'}`;
+    coerenciaTag  = _tagDiv('Divergência', 'err');
+    coerenciaHtml = `Ressalva: <strong>${ressalvaNum}%</strong> · Soma: <strong>${soma}%</strong> (Histórico ${percPrevio}% + Novo ${percNovo}%) · Decisão: <strong>${inputs.opcaoDivergencia || 'N/I'}</strong>`;
+  }
+  const cObjeto = `
+    ${_linha('Percentual cedido',
+      `<strong style="font-size:15px;">${objEcon.percentual_instrumento?.percentual_numero || 0}%</strong>
+       <span style="color:var(--text-muted);font-size:11px;margin-left:6px;">${objEcon.percentual_instrumento?.texto_literal || ''}</span>
+       <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">${objEcon.percentual_instrumento?.analise || ''}</div>`,
+      objEcon.percentual_instrumento?.localizacao || '')}
+    ${_linha('Base de cálculo',
+      `${_badge(objEcon.base_calculo?.classificacao || 'BASE_INDEFINIDA', 'gold')}
+       <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">${objEcon.base_calculo?.analise || ''}</div>`,
+      objEcon.base_calculo?.localizacao || '')}
+    ${_linha('Superpreferência',
+      `${_badge(inst.superpreferencia?.status || 'sem_previsao', inst.superpreferencia?.declaracao_renuncia_expressa ? 'green' : 'gold')}
+       <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">${inst.superpreferencia?.analise || ''}</div>`,
+      inst.superpreferencia?.localizacao || '')}
+    ${_linha('Ressalva de honorários',
+      `${_badge(ressalva.tipo || 'sem_previsao', 'gold')}
+       ${ressalvaNum > 0 ? `<strong style="margin-left:6px;">${ressalvaNum}%</strong>` : ''}
+       <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">${ressalva.analise || ''}</div>`,
+      ressalva.localizacao || '')}
+    ${_linha('Coerência destaques × ressalva',
+      `${coerenciaTag} <span style="margin-left:8px;font-size:11px;">${coerenciaHtml}</span>`,
+      'Motor de regras')}
+    ${_linha('% NSC',
+      '<span style="color:var(--text-muted);font-size:12px;">Calculado no Passo 3 após confirmação de todas as seções</span>',
+      'Passo 3')}`;
+
+  // DESTAQUE (condicional)
+  let secaoDestaque = '';
+  const secoesIds = ['dados', 'docs', 'partes', 'objeto'];
+  if (reqDestaque.ha_requerimento) {
+    secoesIds.push('destaque');
+    const contrato    = reqDestaque.contrato_honorarios || {};
+    const assinaturas = contrato.formalidades_instrumento?.assinaturas || {};
+    const estip       = contrato.objeto_e_valores?.estipulacao_honorarios || {};
+    const intimDest   = reqDestaque.peticao_anexa?.pedido_intimacao_exclusiva;
+    const cDestaque = `
+      ${_linha('Status do pedido', _tagDiv('Requerido', 'warn'), '')}
+      ${_linha('Contrato',
+        `Data: <strong>${contrato.formalidades_instrumento?.data_contrato?.data_celebracao || '—'}</strong>
+         &nbsp; Assin. cliente: ${_ok(assinaturas.assinatura_cliente_presente)}
+         &nbsp; Assin. advogado: ${_ok(assinaturas.assinatura_advogado_presente)}
+         <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">${assinaturas.analise_manifestacao_vontade || ''}</div>`,
+        contrato.formalidades_instrumento?.data_contrato?.localizacao || '')}
+      ${_linha('Honorários',
+        estip.possui_percentual_ou_valor_expresso
+          ? `<strong>${estip.percentual_numero || 0}%</strong> <span style="color:var(--text-muted);font-size:11px;margin-left:6px;">${estip.valor_percentual_literal || ''}</span>`
+          : _tagDiv('Sem percentual expresso', 'err'), '')}
+      ${intimDest?.existe_pedido
+        ? _linha('Intimação exclusiva (destaque)',
+            `${_tagDiv('Sim', 'warn')} — ${(intimDest.advogados_indicados || []).map(a => `${a.nome} (OAB ${a.oab})`).join(', ')}`,
+            intimDest.localizacao || '')
+        : ''}`;
+    secaoDestaque = _secaoComRevisao('destaque', 'Destaque de Honorários', 'gold', cDestaque);
   }
 
-  html += _criarLinha("Ressalva de Honorários",
-    `<em>Tipo:</em> <strong>${ressalva.tipo || 'sem_previsao'}</strong><br><em>%:</em> ${ressalvaNum}%`,
-    ressalva.localizacao);
-  html += _criarLinha("Coerência (Destaques × Ressalva)",
-    `<span style="${estiloCoer}">${infoCoer}</span>`, "Motor de Regras");
+  return `
+  <div style="margin-bottom:10px;font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px;">
+    <span>Certidão gerada por IA</span> <span>·</span>
+    <strong style="color:var(--text);">Confirme cada seção para liberar a minuta</strong>
+  </div>
+  <div class="conferencia-wrap" id="conferenciaWrap" data-secoes='${JSON.stringify(secoesIds)}'>
+    ${_secaoComRevisao('dados',   'Dados do Precatório',        'navy',  cDados)}
+    ${_secaoComRevisao('docs',    'Documentos e Checklist',     'blue',  cDocs)}
+    ${_secaoComRevisao('partes',  'Partes e Instrumento',       'blue',  cPartes)}
+    ${_secaoComRevisao('objeto',  'Objeto Econômico e Efeitos', 'green', cObjeto)}
+    ${secaoDestaque}
+  </div>
+  <script>
+  (function() {
+    if (window._revisaoPorSecaoOk) return;
+    window._revisaoPorSecaoOk = true;
 
-  html += _criarLinha("% NSC", "<strong>Aguardando confirmação no Passo 3...</strong>", "Passo 3");
+    function getSecoes() {
+      const w = document.getElementById('conferenciaWrap');
+      return w ? JSON.parse(w.dataset.secoes || '[]') : [];
+    }
 
-  return html + `</table>`;
+    window.toggleSecaoRevisao = function(id) {
+      const s = document.getElementById('secao-' + id);
+      if (!s || s.dataset.status === 'confirmada') return;
+      const body = document.getElementById('body-' + id);
+      const icon = document.getElementById('icon-' + id);
+      const aberta = body.style.display !== 'none';
+      body.style.display = aberta ? 'none' : 'block';
+      icon.textContent   = aberta ? '▸' : '▾';
+    };
+
+    window.confirmarSecao = function(id) {
+      const s      = document.getElementById('secao-' + id);
+      const body   = document.getElementById('body-' + id);
+      const icon   = document.getElementById('icon-' + id);
+      const badge  = document.getElementById('badge-' + id);
+      const header = document.getElementById('header-' + id);
+      const wrap   = document.getElementById('confirmar-wrap-' + id);
+
+      s.dataset.status       = 'confirmada';
+      body.style.display     = 'none';
+      icon.textContent       = '✓';
+      icon.style.color       = 'rgba(255,255,255,0.9)';
+      header.style.background = 'var(--green)';
+      header.style.cursor    = 'default';
+      badge.classList.remove('hidden');
+      if (wrap) wrap.style.display = 'none';
+
+      _atualizar();
+    };
+
+    window.resetarRevisaoPorSecao = function() {
+      const coresOriginais = { dados:'navy', docs:'blue', partes:'blue', objeto:'green', destaque:'gold' };
+      getSecoes().forEach(id => {
+        const s      = document.getElementById('secao-' + id);
+        if (!s) return;
+        const body   = document.getElementById('body-' + id);
+        const icon   = document.getElementById('icon-' + id);
+        const badge  = document.getElementById('badge-' + id);
+        const header = document.getElementById('header-' + id);
+        const wrap   = document.getElementById('confirmar-wrap-' + id);
+
+        s.dataset.status        = 'pendente';
+        body.style.display      = 'block';
+        icon.textContent        = '▾';
+        icon.style.color        = '';
+        header.style.background = '';
+        header.style.cursor     = '';
+        badge.classList.add('hidden');
+        if (wrap) wrap.style.display = 'flex';
+      });
+      _atualizar();
+    };
+
+    function _atualizar() {
+      const secoes      = getSecoes();
+      const total       = secoes.length;
+      const confirmadas = secoes.filter(id => {
+        const s = document.getElementById('secao-' + id);
+        return s && s.dataset.status === 'confirmada';
+      }).length;
+      const completo = confirmadas === total;
+
+      const btn = document.getElementById('btnConfirmarCertidao');
+      if (btn) {
+        btn.disabled       = !completo;
+        btn.style.opacity  = completo ? '1' : '0.45';
+        btn.style.cursor   = completo ? 'pointer' : 'not-allowed';
+      }
+      const cnt   = document.getElementById('revisaoContagem');
+      const fill  = document.getElementById('revisaoProgressFill');
+      const stat  = document.getElementById('revisaoStatus');
+      const aviso = document.getElementById('revisaoAviso');
+      if (cnt)   cnt.textContent  = confirmadas + ' / ' + total;
+      if (fill)  fill.style.width = Math.round((confirmadas / total) * 100) + '%';
+      if (stat)  { stat.textContent = completo ? 'todas confirmadas ✓' : 'pendente'; stat.style.color = completo ? 'var(--green)' : 'var(--text-muted)'; }
+      if (aviso) aviso.classList.toggle('hidden', completo);
+    }
+
+    _atualizar();
+  })();
+  <\/script>`;
 }
 
-// ── Minuta do Despacho ─────────────────────────────────────────────────────
+// ── Minuta ─────────────────────────────────────────────────────────────────
+
 function _minuta(extracaoIA, inputsUsuario, textos) {
   const reqCessao    = extracaoIA?.requerimento_cessao || {};
   const inst         = reqCessao.instrumento_cessao || extracaoIA?.instrumento_cessao || {};
   const cessionarios = inst.partes?.cessionarios || [];
-  const nomesCedentes= inputsUsuario.cedentesLegitimos || [];
+  const nomesCedentes = inputsUsuario.cedentesLegitimos || [];
+  const cedente    = nomesCedentes.join(', ').replace(/, ([^,]*)$/, ' e $1') || '[CEDENTE]';
+  const cessionario = cessionarios.map(c => c.nome).join(', ').replace(/, ([^,]*)$/, ' e $1') || '[CESSIONÁRIO]';
+  const eventoCom  = inputsUsuario.eventoComunicacao || '[EVENTO]';
+  const prefixoCom = (eventoCom.includes(',') || eventoCom.includes(' e ') || eventoCom.includes('-')) ? 'aos eventos' : 'ao evento';
 
-  const cedente    = nomesCedentes.join(", ").replace(/, ([^,]*)$/, ' e $1') || "[CEDENTE]";
-  const cessionario= cessionarios.map(c => c.nome).join(", ").replace(/, ([^,]*)$/, ' e $1') || "[CESSIONÁRIO]";
+  const paragrafos = [
+    `Trata-se, ${prefixoCom} ${eventoCom}, de comunicação de cessão dos direitos creditórios de <strong>${cedente}</strong> em favor de <strong>${cessionario}</strong>.`,
+    textos.basePerc || '', textos.ressalva || '', textos.superpreferencia || '',
+    textos.reqDestaque || '', 'É o relatório. Decido.', textos.decisaoDestaque || '',
+    `Dê-se ciência aos procuradores do(s) beneficiário(s) (originário/cedente), bem como do devedor pelo prazo de 2 (dois) dias corridos para eventuais impugnações, nos termos do art. 80, da Resolução n.° 303/2019 do CNJ.`,
+    `Decorrido o prazo sem impugnação dos interessados, <strong>REGISTRE(M)-SE ${cessionario}</strong> como beneficiário(s) cessionário(s) dos direitos previstos na cessão, com o devido cadastramento de seu(s) patrono(s).`,
+    `A ordem cronológica do precatório fica mantida e o(s) cessionário(s) não faz(em) jus às preferências do § 2º do art. 100 da CR, estando sujeito(s) ao disposto no § 2º do art. 42 da Resolução n.° 303/2019 do CNJ.`,
+    `Esta decisão servirá como ofício para conhecimento do juízo da execução, conforme art. 45, § 1º, da referida Resolução.`,
+    `Belo Horizonte, data da assinatura eletrônica.`,
+  ].filter(p => p && p.trim() && p.trim() !== '(omitido)').map(p => `<p>${p}</p>`).join('\n');
 
-  const eventoCom = inputsUsuario.eventoComunicacao || "[EVENTO]";
-  const prefixoCom = (eventoCom.includes(",") || eventoCom.includes(" e ") || eventoCom.includes("-"))
-    ? "aos eventos" : "ao evento";
-
-  const html = `
-<p class="paragrafoPadrao">Trata-se, ${prefixoCom} ${eventoCom}, de comunicação de cessão dos direitos creditórios de <strong>${cedente}</strong> em favor de <strong>${cessionario}</strong>.</p>
-<p class="paragrafoPadrao">${textos.basePerc || ""}</p>
-<p class="paragrafoPadrao">${textos.ressalva || ""}</p>
-<p class="paragrafoPadrao">${textos.superpreferencia || ""}</p>
-<p class="paragrafoPadrao">${textos.reqDestaque || ""}</p>
-<p class="paragrafoPadrao">É o relatório. Decido.</p>
-<p class="paragrafoPadrao">${textos.decisaoDestaque || ""}</p>
-<p class="paragrafoPadrao">Dê-se ciência aos procuradores do(s) beneficiário(s) (originário/cedente), bem como do devedor pelo prazo de 2 (dois) dias corridos para eventuais impugnações, nos termos do art. 80, da Resolução n.° 303/2019 do CNJ.</p>
-<p class="paragrafoPadrao">Decorrido o prazo sem impugnação dos interessados, <strong>REGISTRE(M)-SE ${cessionario}</strong> como beneficiário(s) cessionário(s) dos direitos previstos na cessão, com o devido cadastramento de seu(s) patrono(s).</p>
-<p class="paragrafoPadrao">A ordem cronológica do precatório fica mantida e o(s) cessionário(s) não faz(em) jus às preferências do § 2º do art. 100 da CR, estando sujeito(s) ao disposto no § 2º do art. 42 da Resolução n.° 303/2019 do CNJ.</p>
-<p class="paragrafoPadrao">Esta decisão servirá como ofício para conhecimento do juízo da execução, conforme art. 45, § 1º, da referida Resolução.</p>
-<p class="paragrafoPadrao">Belo Horizonte, data da assinatura eletrônica.</p>`;
-
-  return html
-    .replace(/<p class="paragrafoPadrao">\s*\(omitido\)\s*<\/p>/gi, "")
-    .replace(/<p class="paragrafoPadrao">\s*<\/p>/gi, "")
-    .trim();
+  return `<div class="minuta-wrap">${paragrafos}</div>`;
 }
 
 // ── Tabela NSC ─────────────────────────────────────────────────────────────
-function _tabela(dados) {
-  let linhasHTML = "";
-  (dados.linhasNSC || []).forEach(row => {
-    linhasHTML += `<tr>
-      <td style="border:1px solid #000;padding:5px;">${row.data}</td>
-      <td style="border:1px solid #000;padding:5px;">${row.tipo}</td>
-      <td style="border:1px solid #000;padding:5px;">${row.percentual}%</td>
-      <td style="border:1px solid #000;padding:5px;">${row.de}</td>
-      <td style="border:1px solid #000;padding:5px;">${row.para}</td>
-      <td style="border:1px solid #000;padding:5px;">${row.evento}</td>
-      <td style="border:1px solid #000;padding:5px;">${row.observacao}</td>
-    </tr>`;
-  });
 
-  return `<table style="width:100%;text-align:center;border:1px solid #000;border-collapse:collapse;table-layout:auto;">
-  <tr><th colspan="7" style="text-align:center;font-size:14px;font-weight:bold;">DADOS PARA LANÇAMENTO</th></tr>
-  <tr><td colspan="7" style="text-align:center;font-size:14px;font-weight:bold;">Precatório: ${dados.numero} / ${dados.natureza} / ${dados.vencimento} / ${dados.devedor}</td></tr>
-  <tr style="background:#f2f2f2">
-    <th style="border:1px solid #000;padding:5px;">Data da Comunicação</th>
-    <th style="border:1px solid #000;padding:5px;">Tipo</th>
-    <th style="border:1px solid #000;padding:5px;">%</th>
-    <th style="border:1px solid #000;padding:5px;">DE</th>
-    <th style="border:1px solid #000;padding:5px;">PARA</th>
-    <th style="border:1px solid #000;padding:5px;">Evento Eproc</th>
-    <th style="border:1px solid #000;padding:5px;">Observação</th>
-  </tr>
-  ${linhasHTML}
-</table>`.trim();
+function _tabela(dados) {
+  const linhas = (dados.linhasNSC || []).map(row => `
+    <tr>
+      <td>${row.data}</td><td>${row.tipo}</td>
+      <td><strong>${row.percentual}%</strong></td>
+      <td>${row.de}</td><td>${row.para}</td>
+      <td style="font-family:var(--font-mono);font-size:10px;">${row.evento}</td>
+      <td style="font-size:11px;color:var(--text-muted);">${row.observacao}</td>
+    </tr>`).join('');
+  return `
+  <div class="tabela-wrap">
+    <table class="tabela-nsc">
+      <tr><td colspan="7" class="caption">DADOS PARA LANÇAMENTO</td></tr>
+      <tr><td colspan="7" class="caption" style="font-weight:400;font-size:11px;">
+        ${dados.numero} / ${dados.natureza} / ${dados.vencimento} / ${dados.devedor}
+      </td></tr>
+      <tr><th>Data Comunicação</th><th>Tipo</th><th>%</th><th>DE</th><th>PARA</th><th>Ev. Eproc</th><th>Observação</th></tr>
+      ${linhas}
+    </table>
+  </div>`;
 }
 
-// ── Registro no contrato do core ──────────────────────────────────────────
-window.templateRenderer_cessao_credito = {
-  certidao: _certidao,
-  minuta:   _minuta,
-  tabela:   _tabela
-};
+window.templateRenderer_cessao_credito = { certidao: _certidao, minuta: _minuta, tabela: _tabela };

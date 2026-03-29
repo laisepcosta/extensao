@@ -1,20 +1,23 @@
 /**
- * ui/popup.js
- *
- * CORREÇÃO: Removidas as pontes de compatibilidade que redeclaravam
- * templateLoader, ruleEngine e templateRenderer — esses objetos já são
- * declarados pelos módulos core e estão disponíveis globalmente.
+ * ui/popup.js  v4.0
  *
  * Ordem de carregamento no HTML (deve ser mantida):
  *   core/pdfHandler.js
  *   core/aiService.js
- *   core/templateLoader.js   ← declara `templateLoader`
- *   core/ruleEngine.js       ← declara `ruleEngine`
- *   core/templateRenderer.js ← declara `templateRenderer`
+ *   core/templateLoader.js
+ *   core/ruleEngine.js
+ *   core/templateRenderer.js
  *   templates/cessao-credito/rules.js
  *   templates/cessao-credito/renderer.js
  *   ui/components/documentSelector.js
- *   ui/popup.js              ← apenas consome os módulos acima
+ *   ui/popup.js
+ *
+ * MUDANÇAS v4:
+ *   - Seção A preenchida pelo eproc.js (DOM da tela) — não mais pelo JSON do Gemini
+ *   - preencherCamposIA() só preenche seções C e D
+ *   - _receberDadosProcesso() salva dadosTela e chama preencherCamposEproc()
+ *   - dadosPrecatorio removido do estado e do payload da IA
+ *   - _verificarIA() atualizada para Gemini Web
  */
 
 // ================================================================
@@ -22,10 +25,10 @@
 // ================================================================
 
 let estadoApp = {
-  jsonBruto: null,
-  inputs: null,
+  jsonBruto:  null,
+  inputs:     null,
   templateId: 'cessao-credito',
-  dadosPrecatorio: ''
+  dadosTela:  null,   // dados extraídos do DOM do eProc pelo eproc.js
 };
 
 // ================================================================
@@ -33,22 +36,22 @@ let estadoApp = {
 // ================================================================
 
 function validarDestaquesRealTime() {
-  const painel = document.getElementById('painelAlertaDestaque');
+  const painel     = document.getElementById('painelAlertaDestaque');
   const displayMsg = document.getElementById('msgAlertaUnificada');
-  const areaCheck = document.getElementById('areaCheckPerda');
+  const areaCheck  = document.getElementById('areaCheckPerda');
   const areaDecisao = document.getElementById('areaDecisaoDivergencia');
   const checkPerda = document.getElementById('certificarPerdaObjeto');
 
   if (!painel || !estadoApp.jsonBruto) return;
 
-  const inst = estadoApp.jsonBruto.requerimento_cessao?.instrumento_cessao || {};
+  const inst     = estadoApp.jsonBruto.requerimento_cessao?.instrumento_cessao || {};
   const ressalva = parseFloat(inst.ressalva_honorarios?.percentual_contratuais) || 0;
 
   const previoPerc = parseFloat(document.getElementById('percDestaquePrevio')?.value) || 0;
-  const novoPerc = parseFloat(document.getElementById('percDeferidoAgora')?.value) || 0;
+  const novoPerc   = parseFloat(document.getElementById('percDeferidoAgora')?.value)  || 0;
   const previoNome = document.getElementById('beneficiarioDestaquePrevio')?.value.trim().toLowerCase() || '';
-  const novoNome = document.getElementById('beneficiarioDestaqueNovo')?.value.trim().toLowerCase() || '';
-  const perdaCert = checkPerda?.checked || false;
+  const novoNome   = document.getElementById('beneficiarioDestaqueNovo')?.value.trim().toLowerCase()   || '';
+  const perdaCert  = checkPerda?.checked || false;
 
   const ehDuplicado = (
     previoPerc > 0 && novoPerc > 0 &&
@@ -56,8 +59,8 @@ function validarDestaquesRealTime() {
     previoNome !== '' && previoNome === novoNome
   );
   const novoEfetivo = perdaCert ? 0 : novoPerc;
-  const soma = previoPerc + novoEfetivo;
-  const erroMat = ressalva > 0 && soma !== ressalva;
+  const soma        = previoPerc + novoEfetivo;
+  const erroMat     = ressalva > 0 && soma !== ressalva;
 
   let msgs = [], mostrarCheck = false, mostrarSelect = false, tipoPainel = '';
 
@@ -87,14 +90,14 @@ function validarDestaquesRealTime() {
     areaDecisao.classList.toggle('hidden', !mostrarSelect);
 
     const estilos = {
-      error: { bg: '#fff5f5', border: '#dc3545', color: '#721c24' },
+      error:   { bg: '#fff5f5', border: '#dc3545', color: '#721c24' },
       warning: { bg: '#fffbef', border: '#ffc107', color: '#856404' },
-      success: { bg: '#f4fff6', border: '#28a745', color: '#155724' }
+      success: { bg: '#f4fff6', border: '#28a745', color: '#155724' },
     };
     const e = estilos[tipoPainel] || estilos.warning;
     painel.style.backgroundColor = e.bg;
-    painel.style.borderColor = e.border;
-    displayMsg.style.color = e.color;
+    painel.style.borderColor     = e.border;
+    displayMsg.style.color       = e.color;
   } else {
     painel.classList.add('hidden');
   }
@@ -109,9 +112,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
   inicializarLocalStorage();
 
+  // Toggles de sub-painéis condicionais
   const toggleDiv = (checkId, divId) => {
     const check = document.getElementById(checkId);
-    const div = document.getElementById(divId);
+    const div   = document.getElementById(divId);
     if (check && div) {
       check.addEventListener('change', () => div.classList.toggle('hidden', !check.checked));
       div.classList.toggle('hidden', !check.checked);
@@ -177,7 +181,7 @@ document.addEventListener('DOMContentLoaded', function () {
   document.getElementById('btnGerarCertidao')
     ?.addEventListener('click', function () {
       if (!estadoApp.jsonBruto) {
-        alert('Por favor, carregue o JSON primeiro.');
+        alert('Por favor, analise os documentos primeiro.');
         return;
       }
       try {
@@ -207,10 +211,10 @@ document.addEventListener('DOMContentLoaded', function () {
         const htmlTabela = templateRenderer.renderizarTabela(
           resultado.tabela, estadoApp.templateId
         );
-        document.getElementById('previaMinuta').innerHTML = htmlMinuta;
-        document.getElementById('previaTabela').innerHTML = htmlTabela;
-        document.getElementById('outputMinuta').value = htmlMinuta;
-        document.getElementById('outputTabela').value = htmlTabela;
+        document.getElementById('previaMinuta').innerHTML  = htmlMinuta;
+        document.getElementById('previaTabela').innerHTML  = htmlTabela;
+        document.getElementById('outputMinuta').value      = htmlMinuta;
+        document.getElementById('outputTabela').value      = htmlTabela;
         mudarPasso(2, 3);
       } catch (erro) {
         console.error('[Assistente] Erro ao gerar minuta:', erro);
@@ -219,9 +223,16 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
   document.getElementById('btnVoltarPasso2')
-    ?.addEventListener('click', () => mudarPasso(3, 2));
+    ?.addEventListener('click', () => {
+      if (typeof resetarRevisaoPorSecao === 'function') resetarRevisaoPorSecao();
+      mudarPasso(3, 2);
+    });
+
   document.getElementById('btnVoltarPasso1')
-    ?.addEventListener('click', () => mudarPasso(2, 1));
+    ?.addEventListener('click', () => {
+      if (typeof resetarRevisaoPorSecao === 'function') resetarRevisaoPorSecao();
+      mudarPasso(2, 1);
+    });
 
   configurarCopia('btnCopiarMinuta', 'outputMinuta', 'Só Minuta');
   configurarCopia('btnCopiarTabela', 'outputTabela', 'Só Tabela');
@@ -241,27 +252,37 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
   ['percDestaquePrevio', 'percDeferidoAgora', 'beneficiarioDestaquePrevio',
-    'beneficiarioDestaqueNovo', 'certificarPerdaObjeto'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.addEventListener(
-        el.type === 'checkbox' ? 'change' : 'input',
-        validarDestaquesRealTime
-      );
-    });
+   'beneficiarioDestaqueNovo', 'certificarPerdaObjeto'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener(
+      el.type === 'checkbox' ? 'change' : 'input',
+      validarDestaquesRealTime
+    );
+  });
 });
 
 // ================================================================
-// PASSO 0 — RECEPÇÃO E DOWNLOAD
+// PASSO 0 — RECEPÇÃO DOS DADOS DO EPROC
 // ================================================================
 
 function _receberDadosProcesso(payload) {
   document.getElementById('statusEproc')?.classList.add('hidden');
   document.getElementById('painelDocumentos')?.classList.remove('hidden');
-  document.getElementById('btnAnalisarSelecionados')?.classList.remove('hidden');
 
-  estadoApp.dadosPrecatorio = payload.dadosPrecatorio || '';
+  // Salva dados da tela extraídos pelo eproc.js
+  estadoApp.dadosTela = payload.dadosTela || null;
+
+  // Preenche seção A imediatamente — não espera o Gemini
+  if (estadoApp.dadosTela) {
+    preencherCamposEproc(estadoApp.dadosTela, payload.numeroProcessoFormatado);
+  }
 
   documentSelector.renderizar(payload);
+
+  // Exibe a barra de ação com o botão de analisar
+  const actionBar = document.getElementById('actionBar0');
+  if (actionBar) actionBar.style.display = 'flex';
+
   console.log('[Assistente] Processo carregado:', payload.numeroProcessoFormatado);
 }
 
@@ -271,28 +292,31 @@ function _ativarModoManual() {
   document.getElementById('areaCamposAutopreenchidos')?.classList.add('hidden');
 }
 
+// ================================================================
+// PASSO 0 — DOWNLOAD E PROCESSAMENTO
+// ================================================================
+
 async function _baixarEProcessar(anexos) {
   const btnAnalisar = document.getElementById('btnAnalisarSelecionados');
-  const progresso = document.getElementById('progressoDownload');
-  const msgProg = document.getElementById('msgProgresso');
-  const barra = document.getElementById('barraProgresso');
+  const progresso   = document.getElementById('progressoDownload');
+  const msgProg     = document.getElementById('msgProgresso');
+  const barra       = document.getElementById('barraProgresso');
 
   btnAnalisar.disabled = true;
   progresso.classList.remove('hidden');
-  msgProg.textContent = `⏬ Baixando 0/${anexos.length}...`;
-  barra.style.width = '5%';
+  msgProg.textContent  = `⏬ Baixando 0/${anexos.length}...`;
+  barra.style.width    = '5%';
 
   const _ouvirProgresso = (msg) => {
     if (msg.tipo === 'PROGRESSO_DOWNLOAD') {
-      const pct = Math.round((msg.atual / msg.total) * 50); // Ajustado para 50% (o resto é o upload)
-      barra.style.width = pct + '%';
-      msgProg.textContent = `⏬ Baixando ${msg.atual}/${msg.total}: ${msg.nome}`;
+      const pct = Math.round((msg.atual / msg.total) * 50);
+      barra.style.width    = pct + '%';
+      msgProg.textContent  = `⏬ Baixando ${msg.atual}/${msg.total}: ${msg.nome}`;
     }
   };
   chrome.runtime.onMessage.addListener(_ouvirProgresso);
 
   try {
-    // 1. Faz o download dos PDFs via background/eproc.js
     const resposta = await chrome.runtime.sendMessage({
       tipo: 'BAIXAR_PDFS',
       anexos
@@ -305,39 +329,28 @@ async function _baixarEProcessar(anexos) {
     }
 
     estadoApp.arquivosBase64 = resposta.arquivos;
-
-    msgProg.textContent = '🤖 Enviando PDFs e analisando com a IA (Gemini)...';
-    barra.style.width = '70%';
+    msgProg.textContent = '🤖 Enviando PDFs ao Gemini para análise...';
+    barra.style.width   = '70%';
 
     try {
       const template = await templateLoader.carregar(estadoApp.templateId);
-      const dadosPrecatorio =
-        estadoApp.dadosPrecatorio ||
-        document.getElementById('dadosPrecatorioManual')?.value.trim() ||
-        '';
 
-      const onProgressoModelo = (msg) => {
-        msgProg.textContent = msg;
-      };
-
-      // 2. Chama a IA repassando os ARQUIVOS (e não mais o texto extraído)
       const resultadoIA = await aiService.extrair({
-        arquivosBase64: resposta.arquivos, // Passando os PDFs baixados
+        arquivosBase64: resposta.arquivos,
         promptTemplate: template.prompt,
-        dadosPrecatorio,
-        onProgresso: onProgressoModelo
+        // dadosPrecatorio removido — dados do processo vêm do eProc (DOM)
+        onProgresso: (msg) => { msgProg.textContent = msg; }
       });
 
       if (resultadoIA.sucesso) {
         estadoApp.jsonBruto = resultadoIA.dados;
 
-        // Salvar no session storage para recuperação
         try {
           chrome.storage.session.set({ ultimoJSON: resultadoIA.dados });
-        } catch (_) { }
+        } catch (_) {}
 
         progresso.classList.add('hidden');
-        barra.style.width = '100%';
+        barra.style.width    = '100%';
         btnAnalisar.disabled = false;
 
         mudarPasso(0, 1);
@@ -361,14 +374,14 @@ async function _baixarEProcessar(anexos) {
       const nomesDocs = resposta.arquivos.map(a => a.nome).join(', ');
       document.getElementById('jsonInput').placeholder =
         `✅ ${resposta.arquivos.length} PDF(s) baixado(s): ${nomesDocs}\n\n` +
-        `⚠️ IA local indisponível ou falhou: ${erroIA.message}\n\n` +
-        `Cole aqui o JSON gerado por uma IA externa para continuar.`;
+        `⚠️ Falha na automação do Gemini: ${erroIA.message}\n\n` +
+        `Cole aqui o JSON gerado manualmente para continuar.`;
     }
 
   } catch (erro) {
     chrome.runtime.onMessage.removeListener(_ouvirProgresso);
     progresso.classList.add('hidden');
-    barra.style.width = '0%';
+    barra.style.width    = '0%';
     btnAnalisar.disabled = false;
     console.error('[Assistente] Erro no download:', erro);
     alert('Erro ao baixar documentos: ' + erro.message);
@@ -380,64 +393,99 @@ async function _baixarEProcessar(anexos) {
 // ================================================================
 
 async function _verificarIA() {
-  const status = await aiService.verificarDisponibilidade();
+  const status    = await aiService.verificarDisponibilidade();
   const indicador = document.getElementById('statusIA');
+  const dot       = document.getElementById('iaDot');
   if (!indicador) return;
 
   if (status.disponivel) {
-    indicador.textContent = '🟢 IA local disponível (Gemini Nano)';
-    indicador.style.color = '#28a745';
+    if (dot) dot.classList.add('ok');
+    indicador.textContent = 'Gemini Web disponível';
     return;
   }
 
-  const motivos = {
-    'available': 'disponível',
-    'downloadable': 'modelo não baixado — será iniciado ao analisar',
-    'downloading': 'modelo em download, aguarde e tente novamente',
-    'unavailable': 'indisponível neste dispositivo',
-    'readily': 'disponível',
-    'after-download': 'modelo em download, tente novamente em breve',
-    'no': 'indisponível neste dispositivo',
-    'api_nao_suportada': 'Chrome sem suporte — use Chrome 138+ com as flags habilitadas',
-    'erro_verificacao': 'erro ao verificar disponibilidade'
-  };
-
-  const detalhe = motivos[status.motivo] || status.motivo;
-  indicador.textContent = `🔴 IA local indisponível — ${detalhe}`;
-  indicador.style.color = '#dc3545';
+  if (dot) dot.classList.add('err');
+  indicador.textContent = 'Verifique o login em gemini.google.com';
 }
 
 // ================================================================
-// PREENCHIMENTO AUTOMÁTICO DOS CAMPOS (Passo 1)
+// SEÇÃO A — DADOS DO EPROC (preenchimento automático via DOM)
+// ================================================================
+
+function preencherCamposEproc(dadosTela, numeroFormatado) {
+  if (!dadosTela) return;
+
+  _setVal('procEproc',        dadosTela.numeroEproc || numeroFormatado || '');
+  _setVal('procOriginario',   dadosTela.processoOriginario || '');
+  _setVal('orgaoJulgador',    dadosTela.orgaoJulgador || '');
+  _setVal('assuntoPrincipal', dadosTela.assuntoPrincipal || '');
+
+  _renderizarLocalizadores(dadosTela.localizadores || []);
+  _renderizarPartesTela(dadosTela.requerentes, dadosTela.requeridos);
+
+  // Revela a área de dados e esconde o modo manual
+  document.getElementById('areaCamposAutopreenchidos')?.classList.remove('hidden');
+  document.getElementById('modoManualContainer')?.classList.add('hidden');
+
+  console.log('[Assistente] Seção A preenchida com dados do eProc.');
+}
+
+function _renderizarLocalizadores(localizadores) {
+  const container = document.getElementById('containerLocalizadores');
+  if (!container) return;
+  container.innerHTML = localizadores.length
+    ? localizadores.map(loc =>
+        `<span class="badge badge-blue" style="margin:2px;">${loc}</span>`
+      ).join('')
+    : '<span style="color:var(--text-muted);font-size:11px;">Nenhum</span>';
+}
+
+function _renderizarPartesTela(requerentes, requeridos) {
+  const container = document.getElementById('containerPartesTela');
+  if (!container) return;
+
+  const renderLista = (partes, titulo) => {
+    if (!partes?.length) return '';
+    const items = partes.map(p => {
+      const reps = p.representantes?.length
+        ? `<div style="font-size:11px;color:var(--text-muted);margin-top:1px;">
+             ${p.representantes.join(', ')}
+           </div>`
+        : '';
+      return `<div style="padding:3px 0;border-bottom:1px dashed var(--gray-200);">
+        <strong style="font-size:12px;">${p.nome}</strong>${reps}
+      </div>`;
+    }).join('');
+    return `<div style="flex:1;min-width:0;">
+      <div style="font-size:10px;font-weight:700;letter-spacing:.06em;
+        text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">
+        ${titulo}
+      </div>
+      ${items}
+    </div>`;
+  };
+
+  container.innerHTML = `
+    <div style="display:flex;gap:12px;font-size:12px;">
+      ${renderLista(requerentes, 'Requerente')}
+      ${renderLista(requeridos,  'Requerido')}
+    </div>`;
+}
+
+// ================================================================
+// SEÇÕES C e D — DADOS DOS DOCUMENTOS (preenchimento via JSON da IA)
 // ================================================================
 
 /**
- * Recebe o JSON bruto da IA e preenche os campos do formulário
- * do Passo 1 automaticamente.
- *
- * Mapeamento:
- *   json.metadados_precatorio  → Seção A (readonly)
- *   json.requerimento_destaque → Seção C (destaque novo, se houver)
- *   json.requerimento_cessao.instrumento_cessao.partes.cedentes → Seção D
- *
- * @param {Object} json - JSON extraído pela IA (estadoApp.jsonBruto)
+ * Preenche apenas os campos que dependem da análise dos documentos pelo Gemini.
+ * A seção A (dados do processo) vem do eProc — não mais do JSON.
  */
 function preencherCamposIA(json) {
   if (!json) return;
 
-  // ── A. Identificação do Precatório (readonly) ──────────────────
-  const meta = json.metadados_precatorio || {};
-
-  _setVal('numPrecatorioReal', meta.numero_precatorio);
-  _setVal('naturezaPrec', meta.natureza);
-  _setVal('vencimentoPrec', meta.vencimento);
-  _setVal('procOriginario', meta.processo_judicial_originario);
-  _setVal('procSei', meta.processo_sei);
-  _setVal('procEproc', meta.processo_eproc);
-
-  // ── C. Destaque Novo (se a IA detectou requerimento) ───────────
+  // ── C. Destaque Novo ───────────────────────────────────────────
   const reqDestaque = json.requerimento_destaque || {};
-  const contrato = reqDestaque.contrato_honorarios || {};
+  const contrato    = reqDestaque.contrato_honorarios || {};
 
   if (reqDestaque.ha_requerimento === true) {
     const chkNovo = document.getElementById('deferidoNestaAnalise');
@@ -445,7 +493,6 @@ function preencherCamposIA(json) {
       chkNovo.checked = true;
       chkNovo.dispatchEvent(new Event('change'));
     }
-
     _setVal('beneficiarioDestaqueNovo', reqDestaque.beneficiario || contrato.contratante);
     _setVal('percDeferidoAgora', contrato.percentual_contratuais);
   }
@@ -453,69 +500,43 @@ function preencherCamposIA(json) {
   // ── D. Legitimidade dos Cedentes ───────────────────────────────
   atualizarListaCedentes(json);
 
-  console.log('[Assistente] Campos do Passo 1 preenchidos pela IA.');
+  console.log('[Assistente] Campos IA (seções C e D) preenchidos.');
 }
 
 // ================================================================
-// LISTA DE CEDENTES (Seção D — checkboxes)
+// LISTA DE CEDENTES (Seção D)
 // ================================================================
 
-/**
- * Renderiza os checkboxes de cedentes no container #containerCedentesCheck.
- * Cada cedente vem de json.requerimento_cessao.instrumento_cessao.partes.cedentes.
- *
- * Regra: marca como checked se e_parte_precatorio === true.
- *
- * @param {Object} json - JSON bruto da IA
- */
 function atualizarListaCedentes(json) {
   const container = document.getElementById('containerCedentesCheck');
   if (!container) return;
 
-  const inst = json?.requerimento_cessao?.instrumento_cessao || {};
+  const inst     = json?.requerimento_cessao?.instrumento_cessao || {};
   const cedentes = inst.partes?.cedentes || [];
 
   if (cedentes.length === 0) {
     container.innerHTML =
-      '<span style="color:#999;font-size:14px;">Nenhum cedente identificado pela IA.</span>';
+      '<span style="color:var(--text-muted);font-size:12px;">Nenhum cedente identificado pela IA.</span>';
     return;
   }
 
-  let html = '';
-  cedentes.forEach((c, i) => {
-    const nome = c.nome || `Cedente ${i + 1}`;
-    const doc = c.numero_documento
-      ? ` (${c.tipo_documento || 'Doc'}: ${c.numero_documento})`
+  container.innerHTML = cedentes.map((c, i) => {
+    const nome    = c.nome || `Cedente ${i + 1}`;
+    const doc     = c.numero_documento
+      ? ` <span class="badge badge-blue" style="font-size:9px;">${c.tipo_documento || 'Doc'} ${c.numero_documento}</span>`
       : '';
     const checked = c.e_parte_precatorio ? 'checked' : '';
-
-    html += `
-      <label style="display:flex;align-items:center;gap:8px;
-        font-size:13px;cursor:pointer;padding:3px 0;">
+    return `
+      <label class="cedente-item">
         <input type="checkbox" class="check-cedente"
-          data-nome="${nome}"
-          ${checked}
-          style="width:14px;height:14px;margin:0;cursor:pointer;flex-shrink:0;">
+          data-nome="${nome}" ${checked}>
         <span>${nome}${doc}</span>
       </label>`;
-  });
-
-  container.innerHTML = html;
+  }).join('');
 }
 
 // ================================================================
-// UTILITÁRIO: setar valor + disparar evento para localStorage
-// ================================================================
-
-function _setVal(id, val) {
-  const el = document.getElementById(id);
-  if (!el || val === undefined || val === null || val === '') return;
-  el.value = String(val);
-  el.dispatchEvent(new Event('input', { bubbles: true }));
-}
-
-// ================================================================
-// CARREGAMENTO DE DADOS NA TELA
+// CARREGAMENTO PÓS-IA
 // ================================================================
 
 function _carregarDadosNaTela(json) {
@@ -531,33 +552,41 @@ function _carregarDadosNaTela(json) {
 // UTILITÁRIOS
 // ================================================================
 
+function _setVal(id, val) {
+  const el = document.getElementById(id);
+  if (!el || val === undefined || val === null || val === '') return;
+  el.value = String(val);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 function inicializarLocalStorage() {
-  const inputs = document.querySelectorAll(
-    'input:not(#jsonInput), textarea:not(#jsonInput), select'
-  );
-  inputs.forEach(el => {
-    const salvo = localStorage.getItem(el.id);
-    if (salvo !== null) {
-      if (el.type === 'checkbox') el.checked = (salvo === 'true');
-      else el.value = salvo;
-    }
-    const ev = el.type === 'checkbox' ? 'change' : 'input';
-    el.addEventListener(ev, () =>
-      localStorage.setItem(el.id, el.type === 'checkbox' ? el.checked : el.value)
-    );
-  });
+  document.querySelectorAll('input:not(#jsonInput), textarea:not(#jsonInput), select')
+    .forEach(el => {
+      const salvo = localStorage.getItem(el.id);
+      if (salvo !== null) {
+        if (el.type === 'checkbox') el.checked = (salvo === 'true');
+        else el.value = salvo;
+      }
+      const ev = el.type === 'checkbox' ? 'change' : 'input';
+      el.addEventListener(ev, () =>
+        localStorage.setItem(el.id, el.type === 'checkbox' ? el.checked : el.value)
+      );
+    });
 }
 
 function mudarPasso(sai, entra) {
   document.getElementById(`passo${sai}`)?.classList.add('hidden');
   document.getElementById(`passo${entra}`)?.classList.remove('hidden');
+  // Atualiza indicador de passos se a função existir (definida no popup.html)
+  if (typeof atualizarIndicador === 'function') atualizarIndicador(entra);
+  if (typeof sincronizarActionBars === 'function') sincronizarActionBars(entra);
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function configurarCopia(btnId, areaId, label) {
   document.getElementById(btnId)?.addEventListener('click', function () {
-    navigator.clipboard.writeText(document.getElementById(areaId).value);
-    this.innerText = `✓ Copiado!`;
+    navigator.clipboard.writeText(document.getElementById(areaId)?.value || '');
+    this.innerText = '✓ Copiado!';
     this.style.backgroundColor = '#28a745';
     setTimeout(() => {
       this.innerText = label;
@@ -573,21 +602,21 @@ function capturarInputsFinais() {
   });
 
   estadoApp.inputs = {
-    eventoComunicacao: document.getElementById('eventoComunicacaoCessao')?.value || '',
-    eventoInstrumento: document.getElementById('eventoInstrumentoCessao')?.value || '',
-    dataComunicacao: document.getElementById('dataComunicacaoCessao')?.value || '',
-    existeDestaquePrevio: document.getElementById('existeDestaquePrevio')?.checked || false,
-    percDestaquePrevio: parseFloat(document.getElementById('percDestaquePrevio')?.value) || 0,
-    eventoDestaquePrevio: document.getElementById('eventoDestaquePrevio')?.value || '',
+    eventoComunicacao:        document.getElementById('eventoComunicacaoCessao')?.value   || '',
+    eventoInstrumento:        document.getElementById('eventoInstrumentoCessao')?.value   || '',
+    dataComunicacao:          document.getElementById('dataComunicacaoCessao')?.value     || '',
+    existeDestaquePrevio:     document.getElementById('existeDestaquePrevio')?.checked    || false,
+    percDestaquePrevio:       parseFloat(document.getElementById('percDestaquePrevio')?.value) || 0,
+    eventoDestaquePrevio:     document.getElementById('eventoDestaquePrevio')?.value      || '',
     beneficiarioDestaquePrevio: document.getElementById('beneficiarioDestaquePrevio')?.value || '',
-    deferidoNestaAnalise: document.getElementById('deferidoNestaAnalise')?.checked || false,
-    percDeferidoAgora: parseFloat(document.getElementById('percDeferidoAgora')?.value) || 0,
-    eventoPedidoDestaque: document.getElementById('eventoPedidoDestaque')?.value || '',
-    dataPedidoDestaque: document.getElementById('dataPedidoDestaque')?.value || '',
-    beneficiarioDestaqueNovo: document.getElementById('beneficiarioDestaqueNovo')?.value || '',
-    opcaoDivergencia: document.getElementById('opcaoDivergencia')?.value || 'INTIMAR',
+    deferidoNestaAnalise:     document.getElementById('deferidoNestaAnalise')?.checked    || false,
+    percDeferidoAgora:        parseFloat(document.getElementById('percDeferidoAgora')?.value)  || 0,
+    eventoPedidoDestaque:     document.getElementById('eventoPedidoDestaque')?.value      || '',
+    dataPedidoDestaque:       document.getElementById('dataPedidoDestaque')?.value        || '',
+    beneficiarioDestaqueNovo: document.getElementById('beneficiarioDestaqueNovo')?.value  || '',
+    opcaoDivergencia:         document.getElementById('opcaoDivergencia')?.value          || 'INTIMAR',
     inferiorEquivaleTotalidade: document.getElementById('inferiorEquivaleTotalidade')?.checked || false,
-    perdaObjetoCertificada: document.getElementById('certificarPerdaObjeto')?.checked || false,
+    perdaObjetoCertificada:   document.getElementById('certificarPerdaObjeto')?.checked   || false,
     cedentesLegitimos,
   };
 }
