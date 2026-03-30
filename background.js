@@ -213,20 +213,44 @@ async function _analisarViaGemini(payload, responder) {
 
 function _enviarPromptParaAba(tabId) {
   if (tabId !== _abaMensagensGemini.tabId) return;
-  clearTimeout(_abaMensagensGemini.timeout);
-  console.log(`[background] Gemini pronto (tab ${tabId}). Enviando payload...`);
 
-  chrome.tabs.sendMessage(tabId, {
-    tipo: 'INJETAR_PROMPT',
-    payload: _abaMensagensGemini.payload,
-  }).catch(err => {
-    console.error('[background] Falha ao enviar para gemini.js:', err);
-    _fecharAbaGemini();
-    if (_abaMensagensGemini.responder) {
-      _abaMensagensGemini.responder({ sucesso: false, erro: err.message });
-      _abaMensagensGemini.responder = null;
+  clearTimeout(_abaMensagensGemini.timeout);
+
+  console.log(`[background] Gemini pronto (tab ${tabId}). Aguardando estabilização...`);
+
+  (async () => {
+    try {
+      // 🔴 PASSO 1 — delay inicial (DOM geral)
+      const resp = await chrome.tabs.sendMessage(tabId, { tipo: 'PING_UPLOAD_READY' });
+
+      // 🔴 PASSO 2 — aguarda content_script confirmar UI pronta
+      await chrome.tabs.sendMessage(tabId, { tipo: 'PING_UPLOAD_READY' });
+
+      console.log('[background] UI do Gemini pronta. Enviando payload...');
+
+      chrome.tabs.sendMessage(tabId, {
+        tipo: 'INJETAR_PROMPT',
+        payload: _abaMensagensGemini.payload,
+      });
+
+    } catch (err) {
+      console.warn('[background] Falha ao aguardar UI. Tentando envio mesmo assim...', err.message);
+
+      chrome.tabs.sendMessage(tabId, {
+        tipo: 'INJETAR_PROMPT',
+        payload: _abaMensagensGemini.payload,
+      }).catch(err2 => {
+        console.error('[background] Falha ao enviar para gemini.js:', err2);
+
+        _fecharAbaGemini();
+
+        if (_abaMensagensGemini.responder) {
+          _abaMensagensGemini.responder({ sucesso: false, erro: err2.message });
+          _abaMensagensGemini.responder = null;
+        }
+      });
     }
-  });
+  })();
 }
 
 function _receberRespostaGemini(mensagem) {
