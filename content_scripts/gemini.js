@@ -31,34 +31,36 @@
     // Campo de texto Quill
     campoTexto: 'rich-textarea .ql-editor[contenteditable="true"]',
 
-    // Botão enviar — PT-BR confirmado
+    // Botão enviar
     btnEnviar: [
       'button[aria-label="Enviar mensagem"]',
+      'button[aria-label="Send message"]',
       'button.send-button.submit',
-      'button.send-button',
+      'button.send-button'
     ].join(', '),
 
     // Botão "+" que abre menu de upload
     btnAbrirMenuUpload: [
       'button[aria-label="Abrir o menu de envio de arquivo"]',
-      'button.upload-card-button',
+      'button[aria-label="Upload image or file"]',
+      'button.upload-card-button'
     ].join(', '),
 
     // Botão oculto de arquivo local (xapfileselectortrigger)
-    // Este é o trigger real — clicar nele faz o Angular criar input[type=file]
+    // Atualizado com o data-test-id exato do DOM fornecido
     btnUploadOculto: [
+      'button[data-test-id="hidden-local-file-upload-button"]',
       'button.hidden-local-file-upload-button',
-      'button[tabindex="-2"][xapfileselectortrigger]:not(.hidden-local-upload-button)',
+      'button[tabindex="-2"][xapfileselectortrigger]'
     ].join(', '),
 
-    // Botão seletor de modo ("Rápido" / "Raciocínio")
+    // Botão seletor de modo ("Pro" / "Raciocínio")
     btnSeletorModo: [
       'button[aria-label="Abrir seletor de modo"]',
-      'button[data-test-id="bard-mode-menu-button"]',
+      'button[data-test-id="bard-mode-menu-button"]'
     ].join(', '),
 
-    // Item "Raciocínio" no menu de modo (aparece após clicar no seletor)
-    // O menu tem classe gds-mode-switch-menu
+    // Item no menu de modo
     itemMenuModo: '.gds-mode-switch-menu .mat-mdc-menu-item, .mat-mdc-menu-panel .mat-mdc-menu-item, [role="menuitem"]',
 
     // Loading/geração em andamento
@@ -66,7 +68,7 @@
       'mat-progress-bar',
       '.progress-container',
       'model-response.is-generating',
-      '[data-is-generating="true"]',
+      '[data-is-generating="true"]'
     ].join(', '),
 
     // Última resposta do modelo
@@ -74,7 +76,7 @@
       'model-response:last-of-type .markdown',
       'model-response:last-of-type message-content',
       'model-response:last-of-type',
-      '.response-container:last-child .markdown',
+      '.response-container:last-child .markdown'
     ].join(', '),
 
     // Chips de arquivo anexado (confirmação visual do upload)
@@ -82,9 +84,10 @@
       'file-upload-chip',
       '.file-chip',
       '[data-test-id*="chip"]',
+      '[data-test-id="uploaded-file-chip"]',
       'attachment-chip',
       '.upload-chip',
-      'inline-attachment',
+      'inline-attachment'
     ].join(', '),
   };
 
@@ -93,15 +96,15 @@
   // ================================================================
 
   const T = {
-    CAMPO_MS:       15000,
-    MODO_MS:         5000,
-    MENU_ABRIR_MS:   2000,
-    UPLOAD_MS:       8000,  // espera o Gemini processar os arquivos
-    INPUT_DIN_MS:    3000,  // janela para capturar o input dinâmico
-    BOTAO_ATIVO_MS:  8000,
-    LOADING_MS:     10000,
-    RESPOSTA_MS:   180000,  // 3 min (Raciocínio é mais lento)
-    POLL_MS:           300,
+    CAMPO_MS: 15000,
+    MODO_MS: 5000,
+    MENU_ABRIR_MS: 2000,
+    UPLOAD_MS: 8000,  // espera o Gemini processar os arquivos
+    INPUT_DIN_MS: 3000,  // janela para capturar o input dinâmico
+    BOTAO_ATIVO_MS: 8000,
+    LOADING_MS: 10000,
+    RESPOSTA_MS: 180000,  // 3 min (Raciocínio é mais lento)
+    POLL_MS: 300,
   };
 
   // ================================================================
@@ -155,7 +158,7 @@
 
   function _base64ToFile(base64, nome) {
     const bytes = atob(base64);
-    const arr   = new Uint8Array(bytes.length);
+    const arr = new Uint8Array(bytes.length);
     for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
     return new File([arr], nome, { type: 'application/pdf' });
   }
@@ -173,7 +176,7 @@
 
       // Já está no modo correto?
       if (textoAtual.includes('racioc') || textoAtual.includes('reason') ||
-          textoAtual.includes('think')  || textoAtual.includes('deep')) {
+        textoAtual.includes('think') || textoAtual.includes('deep')) {
         console.log('[gemini.js] Modo Raciocínio já ativo.');
         return;
       }
@@ -191,8 +194,8 @@
       const opcao = itens.find(el => {
         const txt = el.textContent?.toLowerCase() || '';
         return txt.includes('racioc') || txt.includes('reason') ||
-               txt.includes('think')  || txt.includes('deep')   ||
-               txt.includes('flash thinking') || txt.includes('2.0 flash');
+          txt.includes('think') || txt.includes('deep') ||
+          txt.includes('flash thinking') || txt.includes('2.0 flash');
       });
 
       if (opcao) {
@@ -279,12 +282,12 @@
             } catch (_) {
               // Alguns ambientes não permitem defineProperty em inputs
               // Tenta atribuição direta como fallback
-              try { input.files = dt.files; } catch (_2) {}
+              try { input.files = dt.files; } catch (_2) { }
             }
 
             // Dispara eventos que o Angular/Quill escuta
             input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.dispatchEvent(new Event('input',  { bubbles: true }));
+            input.dispatchEvent(new Event('input', { bubbles: true }));
 
             console.log(`[gemini.js] ${arquivos.length} arquivo(s) injetado(s).`);
             return;
@@ -350,7 +353,7 @@
     campo.focus();
     // Limpa qualquer conteúdo anterior
     document.execCommand('selectAll', false, null);
-    document.execCommand('delete',    false, null);
+    document.execCommand('delete', false, null);
 
     // Insere em chunks de 5K para não travar a thread
     for (let i = 0; i < texto.length; i += 5000) {
@@ -428,17 +431,17 @@
       let txt = jsonBruto.replace(/,\s*$/, '').replace(/:\s*$/, ': null').replace(/:\s*"[^"]*$/, ': ""');
       let chaves = 0, colchetes = 0, dentroStr = false, esc = false;
       for (const c of txt) {
-        if (esc)       { esc = false; continue; }
-        if (c === '\\') { esc = true;  continue; }
-        if (c === '"')  { dentroStr = !dentroStr; continue; }
-        if (dentroStr)  continue;
+        if (esc) { esc = false; continue; }
+        if (c === '\\') { esc = true; continue; }
+        if (c === '"') { dentroStr = !dentroStr; continue; }
+        if (dentroStr) continue;
         if (c === '{') chaves++;
         if (c === '}') chaves--;
         if (c === '[') colchetes++;
         if (c === ']') colchetes--;
       }
       while (colchetes > 0) { txt += ']'; colchetes--; }
-      while (chaves   > 0) { txt += '}'; chaves--;    }
+      while (chaves > 0) { txt += '}'; chaves--; }
       return JSON.parse(txt);
     } catch (_) { return null; }
   }
@@ -472,7 +475,7 @@
         const json = _extrairJSON(textoResposta);
 
         chrome.runtime.sendMessage({
-          tipo:    'GEMINI_JSON_EXTRAIDO',
+          tipo: 'GEMINI_JSON_EXTRAIDO',
           sucesso: true,
           json,
         });
@@ -480,9 +483,9 @@
       } catch (erro) {
         console.error('[gemini.js] Erro na automação:', erro.message);
         chrome.runtime.sendMessage({
-          tipo:    'GEMINI_JSON_EXTRAIDO',
+          tipo: 'GEMINI_JSON_EXTRAIDO',
           sucesso: false,
-          erro:    erro.message,
+          erro: erro.message,
         });
       }
     })();
@@ -502,7 +505,7 @@
     } catch (err) {
       console.warn('[gemini.js] Campo de texto não apareceu:', err.message);
     }
-    chrome.runtime.sendMessage({ tipo: 'GEMINI_PRONTO' }).catch(() => {});
+    chrome.runtime.sendMessage({ tipo: 'GEMINI_PRONTO' }).catch(() => { });
   }
 
   if (document.readyState === 'loading') {
