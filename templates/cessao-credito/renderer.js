@@ -1,11 +1,15 @@
 /**
- * templates/cessao-credito/renderer.js  v5.0
+ * templates/cessao-credito/renderer.js  v6.0
  *
- * REVISÃO POR SEÇÃO:
- *  - Cada seção da certidão tem botão "Confirmar esta seção" no rodapé
- *  - Seção confirmada: colapsa, cabeçalho fica verde com selo ✓
- *  - Botão global "Gerar Minuta" só ativa quando TODAS as seções confirmadas
- *  - Ao voltar, todas as confirmações são resetadas
+ * CSP FIX: removido o bloco <script> que era injetado via innerHTML.
+ * O Manifest V3 bloqueia inline scripts mesmo dentro de innerHTML.
+ *
+ * A lógica de revisão por seção (toggleSecaoRevisao, confirmarSecao,
+ * resetarRevisaoPorSecao, _atualizar) foi movida para popup.js,
+ * onde é declarada no escopo global antes de qualquer uso.
+ *
+ * O renderer agora apenas gera HTML puro com data-attributes e
+ * IDs que o popup.js usa para controlar o estado.
  */
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -44,35 +48,32 @@ function _renderParte(p) {
   return `<strong>${p.nome || '—'}</strong> ${id}`;
 }
 
-// ── Seção com confirmação obrigatória no rodapé ────────────────────────────
+// ── Seção com confirmação — sem script inline ──────────────────────────────
+// Os handlers onclick chamam funções globais declaradas em popup.js
 
 function _secaoComRevisao(id, titulo, cor, conteudo) {
   return `
   <div class="conf-secao" id="secao-${id}" data-status="pendente">
-
-    <div class="conf-secao-header ${cor}" id="header-${id}" onclick="toggleSecaoRevisao('${id}')">
+    <div class="conf-secao-header ${cor}" id="header-${id}"
+         onclick="toggleSecaoRevisao('${id}')">
       <div style="display:flex;align-items:center;gap:8px;">
         <span class="secao-status-icon" id="icon-${id}">▾</span>
         <span>${titulo}</span>
       </div>
       <span class="secao-confirmada-badge hidden" id="badge-${id}">✓ Confirmada</span>
     </div>
-
     <div class="conf-secao-body" id="body-${id}">
-      <div class="conf-secao-conteudo">
-        ${conteudo}
-      </div>
+      <div class="conf-secao-conteudo">${conteudo}</div>
       <div class="secao-confirmar-wrap" id="confirmar-wrap-${id}">
         <div class="secao-confirmar-hint">
           Leia os dados acima e confirme esta seção para continuar
         </div>
-        <button class="secao-btn-confirmar" id="btn-confirmar-${id}"
-          onclick="confirmarSecao('${id}')">
+        <button class="secao-btn-confirmar"
+                onclick="confirmarSecao('${id}')">
           ✓ &nbsp;Confirmar esta seção
         </button>
       </div>
     </div>
-
   </div>`;
 }
 
@@ -131,12 +132,15 @@ function _certidao(json, inputs) {
   const cDocs = `
     ${_linha('Checklist',
       `<ul class="checklist">${listaCheck}</ul>
-       <div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--gray-200);font-size:11px;color:var(--text-muted);">
+       <div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--gray-200);
+         font-size:11px;color:var(--text-muted);">
          <strong>Parecer IA:</strong> ${chk.analise_geral || '—'}
        </div>`, 'Anexos')}
     ${_linha('Intimação exclusiva',
       intimExcl?.existe_pedido
-        ? `${_tagDiv('Sim', 'warn')} — ${(intimExcl.advogados_indicados || []).map(a => `${a.nome} (OAB ${a.oab})`).join(', ')} · Procuração: ${_ok(intimExcl.procuracao_valida_anexada)}`
+        ? `${_tagDiv('Sim', 'warn')} — ${(intimExcl.advogados_indicados || [])
+            .map(a => `${a.nome} (OAB ${a.oab})`).join(', ')}
+           · Procuração: ${_ok(intimExcl.procuracao_valida_anexada)}`
         : _tagDiv('Não', 'ok'),
       intimExcl?.localizacao || 'Petição')}
     ${_linha('Eventos',
@@ -180,10 +184,12 @@ function _certidao(json, inputs) {
       formalidades.localizacao || '')}
     ${inst.dados_escritura_publica?.lavrado_em_cartorio
       ? _linha('Escritura Pública',
-          `${inst.dados_escritura_publica.nome_cartorio || '—'} · Livro ${inst.dados_escritura_publica.livro || '—'} · Pág. ${inst.dados_escritura_publica.pagina || '—'}`, '')
+          `${inst.dados_escritura_publica.nome_cartorio || '—'}
+           · Livro ${inst.dados_escritura_publica.livro || '—'}
+           · Pág. ${inst.dados_escritura_publica.pagina || '—'}`, '')
       : ''}`;
 
-  // OBJETO ECONÔMICO E EFEITOS
+  // OBJETO ECONÔMICO
   const ressalvaNum = parseFloat(ressalva.percentual_contratuais) || 0;
   const percPrevio  = parseFloat(inputs.percDestaquePrevio) || 0;
   const percNovo    = inputs.perdaObjetoCertificada ? 0 : (parseFloat(inputs.percDeferidoAgora) || 0);
@@ -197,21 +203,32 @@ function _certidao(json, inputs) {
     coerenciaHtml = `Ressalva (${ressalvaNum}%) = Soma de destaques (${soma}%)`;
   } else {
     coerenciaTag  = _tagDiv('Divergência', 'err');
-    coerenciaHtml = `Ressalva: <strong>${ressalvaNum}%</strong> · Soma: <strong>${soma}%</strong> (Histórico ${percPrevio}% + Novo ${percNovo}%) · Decisão: <strong>${inputs.opcaoDivergencia || 'N/I'}</strong>`;
+    coerenciaHtml = `Ressalva: <strong>${ressalvaNum}%</strong> · Soma: <strong>${soma}%</strong>
+      (Histórico ${percPrevio}% + Novo ${percNovo}%)
+      · Decisão: <strong>${inputs.opcaoDivergencia || 'N/I'}</strong>`;
   }
   const cObjeto = `
     ${_linha('Percentual cedido',
       `<strong style="font-size:15px;">${objEcon.percentual_instrumento?.percentual_numero || 0}%</strong>
-       <span style="color:var(--text-muted);font-size:11px;margin-left:6px;">${objEcon.percentual_instrumento?.texto_literal || ''}</span>
-       <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">${objEcon.percentual_instrumento?.analise || ''}</div>`,
+       <span style="color:var(--text-muted);font-size:11px;margin-left:6px;">
+         ${objEcon.percentual_instrumento?.texto_literal || ''}
+       </span>
+       <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">
+         ${objEcon.percentual_instrumento?.analise || ''}
+       </div>`,
       objEcon.percentual_instrumento?.localizacao || '')}
     ${_linha('Base de cálculo',
       `${_badge(objEcon.base_calculo?.classificacao || 'BASE_INDEFINIDA', 'gold')}
-       <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">${objEcon.base_calculo?.analise || ''}</div>`,
+       <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">
+         ${objEcon.base_calculo?.analise || ''}
+       </div>`,
       objEcon.base_calculo?.localizacao || '')}
     ${_linha('Superpreferência',
-      `${_badge(inst.superpreferencia?.status || 'sem_previsao', inst.superpreferencia?.declaracao_renuncia_expressa ? 'green' : 'gold')}
-       <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">${inst.superpreferencia?.analise || ''}</div>`,
+      `${_badge(inst.superpreferencia?.status || 'sem_previsao',
+          inst.superpreferencia?.declaracao_renuncia_expressa ? 'green' : 'gold')}
+       <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">
+         ${inst.superpreferencia?.analise || ''}
+       </div>`,
       inst.superpreferencia?.localizacao || '')}
     ${_linha('Ressalva de honorários',
       `${_badge(ressalva.tipo || 'sem_previsao', 'gold')}
@@ -222,7 +239,7 @@ function _certidao(json, inputs) {
       `${coerenciaTag} <span style="margin-left:8px;font-size:11px;">${coerenciaHtml}</span>`,
       'Motor de regras')}
     ${_linha('% NSC',
-      '<span style="color:var(--text-muted);font-size:12px;">Calculado no Passo 3 após confirmação de todas as seções</span>',
+      '<span style="color:var(--text-muted);font-size:12px;">Calculado no Passo 3</span>',
       'Passo 3')}`;
 
   // DESTAQUE (condicional)
@@ -240,123 +257,45 @@ function _certidao(json, inputs) {
         `Data: <strong>${contrato.formalidades_instrumento?.data_contrato?.data_celebracao || '—'}</strong>
          &nbsp; Assin. cliente: ${_ok(assinaturas.assinatura_cliente_presente)}
          &nbsp; Assin. advogado: ${_ok(assinaturas.assinatura_advogado_presente)}
-         <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">${assinaturas.analise_manifestacao_vontade || ''}</div>`,
+         <div style="margin-top:3px;font-size:11px;color:var(--text-muted);">
+           ${assinaturas.analise_manifestacao_vontade || ''}
+         </div>`,
         contrato.formalidades_instrumento?.data_contrato?.localizacao || '')}
       ${_linha('Honorários',
         estip.possui_percentual_ou_valor_expresso
-          ? `<strong>${estip.percentual_numero || 0}%</strong> <span style="color:var(--text-muted);font-size:11px;margin-left:6px;">${estip.valor_percentual_literal || ''}</span>`
+          ? `<strong>${estip.percentual_numero || 0}%</strong>
+             <span style="color:var(--text-muted);font-size:11px;margin-left:6px;">
+               ${estip.valor_percentual_literal || ''}
+             </span>`
           : _tagDiv('Sem percentual expresso', 'err'), '')}
       ${intimDest?.existe_pedido
         ? _linha('Intimação exclusiva (destaque)',
-            `${_tagDiv('Sim', 'warn')} — ${(intimDest.advogados_indicados || []).map(a => `${a.nome} (OAB ${a.oab})`).join(', ')}`,
+            `${_tagDiv('Sim', 'warn')} — ${(intimDest.advogados_indicados || [])
+              .map(a => `${a.nome} (OAB ${a.oab})`).join(', ')}`,
             intimDest.localizacao || '')
         : ''}`;
     secaoDestaque = _secaoComRevisao('destaque', 'Destaque de Honorários', 'gold', cDestaque);
   }
 
+  // Armazena a lista de seções em atributo data para o popup.js ler
+  // SEM nenhum <script> inline
   return `
-  <div style="margin-bottom:10px;font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px;">
+  <div style="margin-bottom:10px;font-size:11px;color:var(--text-muted);
+    display:flex;align-items:center;gap:6px;">
     <span>Certidão gerada por IA</span> <span>·</span>
     <strong style="color:var(--text);">Confirme cada seção para liberar a minuta</strong>
   </div>
-  <div class="conferencia-wrap" id="conferenciaWrap" data-secoes='${JSON.stringify(secoesIds)}'>
+  <div class="conferencia-wrap" id="conferenciaWrap"
+       data-secoes='${JSON.stringify(secoesIds)}'>
     ${_secaoComRevisao('dados',   'Dados do Precatório',        'navy',  cDados)}
     ${_secaoComRevisao('docs',    'Documentos e Checklist',     'blue',  cDocs)}
     ${_secaoComRevisao('partes',  'Partes e Instrumento',       'blue',  cPartes)}
     ${_secaoComRevisao('objeto',  'Objeto Econômico e Efeitos', 'green', cObjeto)}
     ${secaoDestaque}
-  </div>
-  <script>
-  (function() {
-    if (window._revisaoPorSecaoOk) return;
-    window._revisaoPorSecaoOk = true;
-
-    function getSecoes() {
-      const w = document.getElementById('conferenciaWrap');
-      return w ? JSON.parse(w.dataset.secoes || '[]') : [];
-    }
-
-    window.toggleSecaoRevisao = function(id) {
-      const s = document.getElementById('secao-' + id);
-      if (!s || s.dataset.status === 'confirmada') return;
-      const body = document.getElementById('body-' + id);
-      const icon = document.getElementById('icon-' + id);
-      const aberta = body.style.display !== 'none';
-      body.style.display = aberta ? 'none' : 'block';
-      icon.textContent   = aberta ? '▸' : '▾';
-    };
-
-    window.confirmarSecao = function(id) {
-      const s      = document.getElementById('secao-' + id);
-      const body   = document.getElementById('body-' + id);
-      const icon   = document.getElementById('icon-' + id);
-      const badge  = document.getElementById('badge-' + id);
-      const header = document.getElementById('header-' + id);
-      const wrap   = document.getElementById('confirmar-wrap-' + id);
-
-      s.dataset.status       = 'confirmada';
-      body.style.display     = 'none';
-      icon.textContent       = '✓';
-      icon.style.color       = 'rgba(255,255,255,0.9)';
-      header.style.background = 'var(--green)';
-      header.style.cursor    = 'default';
-      badge.classList.remove('hidden');
-      if (wrap) wrap.style.display = 'none';
-
-      _atualizar();
-    };
-
-    window.resetarRevisaoPorSecao = function() {
-      const coresOriginais = { dados:'navy', docs:'blue', partes:'blue', objeto:'green', destaque:'gold' };
-      getSecoes().forEach(id => {
-        const s      = document.getElementById('secao-' + id);
-        if (!s) return;
-        const body   = document.getElementById('body-' + id);
-        const icon   = document.getElementById('icon-' + id);
-        const badge  = document.getElementById('badge-' + id);
-        const header = document.getElementById('header-' + id);
-        const wrap   = document.getElementById('confirmar-wrap-' + id);
-
-        s.dataset.status        = 'pendente';
-        body.style.display      = 'block';
-        icon.textContent        = '▾';
-        icon.style.color        = '';
-        header.style.background = '';
-        header.style.cursor     = '';
-        badge.classList.add('hidden');
-        if (wrap) wrap.style.display = 'flex';
-      });
-      _atualizar();
-    };
-
-    function _atualizar() {
-      const secoes      = getSecoes();
-      const total       = secoes.length;
-      const confirmadas = secoes.filter(id => {
-        const s = document.getElementById('secao-' + id);
-        return s && s.dataset.status === 'confirmada';
-      }).length;
-      const completo = confirmadas === total;
-
-      const btn = document.getElementById('btnConfirmarCertidao');
-      if (btn) {
-        btn.disabled       = !completo;
-        btn.style.opacity  = completo ? '1' : '0.45';
-        btn.style.cursor   = completo ? 'pointer' : 'not-allowed';
-      }
-      const cnt   = document.getElementById('revisaoContagem');
-      const fill  = document.getElementById('revisaoProgressFill');
-      const stat  = document.getElementById('revisaoStatus');
-      const aviso = document.getElementById('revisaoAviso');
-      if (cnt)   cnt.textContent  = confirmadas + ' / ' + total;
-      if (fill)  fill.style.width = Math.round((confirmadas / total) * 100) + '%';
-      if (stat)  { stat.textContent = completo ? 'todas confirmadas ✓' : 'pendente'; stat.style.color = completo ? 'var(--green)' : 'var(--text-muted)'; }
-      if (aviso) aviso.classList.toggle('hidden', completo);
-    }
-
-    _atualizar();
-  })();
-  <\/script>`;
+  </div>`;
+  // NOTA: não há <script> aqui.
+  // As funções toggleSecaoRevisao(), confirmarSecao(), resetarRevisaoPorSecao()
+  // são declaradas globalmente em popup.js e carregadas antes do renderer.
 }
 
 // ── Minuta ─────────────────────────────────────────────────────────────────
@@ -366,21 +305,29 @@ function _minuta(extracaoIA, inputsUsuario, textos) {
   const inst         = reqCessao.instrumento_cessao || extracaoIA?.instrumento_cessao || {};
   const cessionarios = inst.partes?.cessionarios || [];
   const nomesCedentes = inputsUsuario.cedentesLegitimos || [];
-  const cedente    = nomesCedentes.join(', ').replace(/, ([^,]*)$/, ' e $1') || '[CEDENTE]';
+  const cedente     = nomesCedentes.join(', ').replace(/, ([^,]*)$/, ' e $1') || '[CEDENTE]';
   const cessionario = cessionarios.map(c => c.nome).join(', ').replace(/, ([^,]*)$/, ' e $1') || '[CESSIONÁRIO]';
-  const eventoCom  = inputsUsuario.eventoComunicacao || '[EVENTO]';
-  const prefixoCom = (eventoCom.includes(',') || eventoCom.includes(' e ') || eventoCom.includes('-')) ? 'aos eventos' : 'ao evento';
+  const eventoCom   = inputsUsuario.eventoComunicacao || '[EVENTO]';
+  const prefixoCom  = (eventoCom.includes(',') || eventoCom.includes(' e ') || eventoCom.includes('-'))
+    ? 'aos eventos' : 'ao evento';
 
   const paragrafos = [
     `Trata-se, ${prefixoCom} ${eventoCom}, de comunicação de cessão dos direitos creditórios de <strong>${cedente}</strong> em favor de <strong>${cessionario}</strong>.`,
-    textos.basePerc || '', textos.ressalva || '', textos.superpreferencia || '',
-    textos.reqDestaque || '', 'É o relatório. Decido.', textos.decisaoDestaque || '',
+    textos.basePerc        || '',
+    textos.ressalva        || '',
+    textos.superpreferencia || '',
+    textos.reqDestaque      || '',
+    'É o relatório. Decido.',
+    textos.decisaoDestaque  || '',
     `Dê-se ciência aos procuradores do(s) beneficiário(s) (originário/cedente), bem como do devedor pelo prazo de 2 (dois) dias corridos para eventuais impugnações, nos termos do art. 80, da Resolução n.° 303/2019 do CNJ.`,
     `Decorrido o prazo sem impugnação dos interessados, <strong>REGISTRE(M)-SE ${cessionario}</strong> como beneficiário(s) cessionário(s) dos direitos previstos na cessão, com o devido cadastramento de seu(s) patrono(s).`,
     `A ordem cronológica do precatório fica mantida e o(s) cessionário(s) não faz(em) jus às preferências do § 2º do art. 100 da CR, estando sujeito(s) ao disposto no § 2º do art. 42 da Resolução n.° 303/2019 do CNJ.`,
     `Esta decisão servirá como ofício para conhecimento do juízo da execução, conforme art. 45, § 1º, da referida Resolução.`,
     `Belo Horizonte, data da assinatura eletrônica.`,
-  ].filter(p => p && p.trim() && p.trim() !== '(omitido)').map(p => `<p>${p}</p>`).join('\n');
+  ]
+  .filter(p => p && p.trim() && p.trim() !== '(omitido)')
+  .map(p => `<p>${p}</p>`)
+  .join('\n');
 
   return `<div class="minuta-wrap">${paragrafos}</div>`;
 }
@@ -390,12 +337,15 @@ function _minuta(extracaoIA, inputsUsuario, textos) {
 function _tabela(dados) {
   const linhas = (dados.linhasNSC || []).map(row => `
     <tr>
-      <td>${row.data}</td><td>${row.tipo}</td>
+      <td>${row.data}</td>
+      <td>${row.tipo}</td>
       <td><strong>${row.percentual}%</strong></td>
-      <td>${row.de}</td><td>${row.para}</td>
+      <td>${row.de}</td>
+      <td>${row.para}</td>
       <td style="font-family:var(--font-mono);font-size:10px;">${row.evento}</td>
       <td style="font-size:11px;color:var(--text-muted);">${row.observacao}</td>
     </tr>`).join('');
+
   return `
   <div class="tabela-wrap">
     <table class="tabela-nsc">
@@ -403,10 +353,19 @@ function _tabela(dados) {
       <tr><td colspan="7" class="caption" style="font-weight:400;font-size:11px;">
         ${dados.numero} / ${dados.natureza} / ${dados.vencimento} / ${dados.devedor}
       </td></tr>
-      <tr><th>Data Comunicação</th><th>Tipo</th><th>%</th><th>DE</th><th>PARA</th><th>Ev. Eproc</th><th>Observação</th></tr>
+      <tr>
+        <th>Data Comunicação</th><th>Tipo</th><th>%</th>
+        <th>DE</th><th>PARA</th><th>Ev. Eproc</th><th>Observação</th>
+      </tr>
       ${linhas}
     </table>
   </div>`;
 }
 
-window.templateRenderer_cessao_credito = { certidao: _certidao, minuta: _minuta, tabela: _tabela };
+// ── Registro ───────────────────────────────────────────────────────────────
+
+window.templateRenderer_cessao_credito = {
+  certidao: _certidao,
+  minuta:   _minuta,
+  tabela:   _tabela,
+};

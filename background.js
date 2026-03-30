@@ -1,30 +1,27 @@
 /**
- * background.js v3.0
- * Ponte de mensagens entre side panel, eproc.js e gemini.js.
+ * background.js v4.0
  *
- * NOVOS FLUXOS (v3):
+ * CORREÇÃO CRÍTICA v4:
+ *   O download dos PDFs falhava porque background.js usava
+ *   chrome.tabs.query({active:true}) para encontrar a aba do eProc.
+ *   Mas quando o Gemini é aberto (active:false), a aba ativa muda
+ *   e o eProc não é mais encontrado.
  *
- *  ANALISAR_VIA_GEMINI (popup → background):
- *    1. Recebe o payload de texto montado pelo aiService
- *    2. Abre aba do gemini.google.com em background (active: false)
- *    3. Aguarda o content script gemini.js estar pronto
- *    4. Envia 'INJETAR_PROMPT' para a aba
- *    5. Aguarda 'GEMINI_JSON_EXTRAIDO' do gemini.js
- *    6. Fecha a aba do Gemini
- *    7. Responde ao popup com o JSON extraído
- *
- *  FLUXOS MANTIDOS (v2):
- *    PROCESSO_DETECTADO — eproc.js → popup
- *    BAIXAR_PDFS        — popup → eproc.js (fetch das 3 camadas)
+ *   Solução: salvar o tabId do eProc no momento em que o processo
+ *   é detectado (PROCESSO_DETECTADO ou SOLICITAR_DADOS_PROCESSO),
+ *   e usar esse tabId fixo para todos os downloads subsequentes.
  */
 
 // ================================================================
-// ESTADO: rastreia a aba do Gemini aberta
+// ESTADO
 // ================================================================
 
+let _tabIdEproc   = null;   // ← tabId do eProc salvo no momento da detecção
 let _abaMensagensGemini = {
-  tabId: null,
-  responder: null,  // função responder do onMessage original
+  tabId:     null,
+  responder: null,
+  payload:   null,
+  timeout:   null,
 };
 
 // ================================================================
@@ -32,6 +29,10 @@ let _abaMensagensGemini = {
 // ================================================================
 
 chrome.action.onClicked.addListener(async (tab) => {
+  // Salva o tabId da aba onde o usuário clicou (deve ser o eProc)
+  _tabIdEproc = tab.id;
+  console.log(`[background] Side panel aberto. tabId eProc salvo: ${_tabIdEproc}`);
+
   await chrome.sidePanel.open({ tabId: tab.id });
 
   setTimeout(async () => {
@@ -41,7 +42,7 @@ chrome.action.onClicked.addListener(async (tab) => {
       });
       if (resposta?.encontrado) {
         chrome.runtime.sendMessage({
-          tipo: 'DADOS_PROCESSO',
+          tipo:    'DADOS_PROCESSO',
           payload: resposta.payload
         }).catch(() => {
           chrome.storage.session.set({ processoDetectado: resposta.payload });
@@ -62,8 +63,13 @@ chrome.runtime.onMessage.addListener((mensagem, remetente, responder) => {
 
     // ── eproc.js detectou processo ────────────────────────────────
     case 'PROCESSO_DETECTADO':
+      // Salva o tabId do eProc (a mensagem vem do content_script)
+      if (remetente.tab?.id) {
+        _tabIdEproc = remetente.tab.id;
+        console.log(`[background] PROCESSO_DETECTADO — tabId eProc: ${_tabIdEproc}`);
+      }
       chrome.runtime.sendMessage({
-        tipo: 'DADOS_PROCESSO',
+        tipo:    'DADOS_PROCESSO',
         payload: mensagem.payload
       }).catch(() => {
         chrome.storage.session.set({ processoDetectado: mensagem.payload });
@@ -71,53 +77,24 @@ chrome.runtime.onMessage.addListener((mensagem, remetente, responder) => {
       responder({ recebido: true });
       break;
 
-    // ── popup pede download de PDFs via eproc.js ──────────────────
+    // ── popup pede download de PDFs ───────────────────────────────
     case 'BAIXAR_PDFS':
-      chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
-        const tabId = tabs[0]?.id;
-        if (!tabId) {
-          responder({ sucesso: false, erro: 'Aba do eProc não encontrada.' });
-          return;
-        }
-        try {
-          const arquivos = [];
-          for (let i = 0; i < mensagem.anexos.length; i++) {
-            const anexo = mensagem.anexos[i];
-
-            chrome.runtime.sendMessage({
-              tipo: 'PROGRESSO_DOWNLOAD',
-              atual: i + 1, total: mensagem.anexos.length, nome: anexo.nome
-            }).catch(() => {});
-
-            const res = await chrome.tabs.sendMessage(tabId, {
-              tipo: 'FETCH_PDF_URL',
-              url:  anexo.url,
-              nome: anexo.nome
-            });
-
-            if (!res?.sucesso) throw new Error(res?.erro || `Falha em "${anexo.nome}".`);
-            arquivos.push({ nome: anexo.nome, docId: anexo.docId || '', base64: res.base64 });
-          }
-          responder({ sucesso: true, arquivos });
-        } catch (err) {
-          responder({ sucesso: false, erro: err.message });
-        }
-      });
+      _baixarPDFs(mensagem.anexos, responder);
       return true; // assíncrono
 
-    // ── popup pede análise via Gemini Pro ─────────────────────────
+    // ── popup pede análise via Gemini ─────────────────────────────
     case 'ANALISAR_VIA_GEMINI':
       _analisarViaGemini(mensagem.payload, responder);
-      return true; // assíncrono
+      return true;
 
     // ── gemini.js retorna JSON extraído ───────────────────────────
     case 'GEMINI_JSON_EXTRAIDO':
       _receberRespostaGemini(mensagem);
       break;
 
-    // ── gemini.js sinaliza que está pronto para receber prompt ────
+    // ── gemini.js sinaliza que está pronto ────────────────────────
     case 'GEMINI_PRONTO':
-      _enviarPromptParaAba(remetente.tab?.id, mensagem);
+      _enviarPromptParaAba(remetente.tab?.id);
       break;
 
     default:
@@ -126,65 +103,99 @@ chrome.runtime.onMessage.addListener((mensagem, remetente, responder) => {
 });
 
 // ================================================================
-// ORQUESTRAÇÃO DA ABA GEMINI
+// DOWNLOAD DE PDFs
 // ================================================================
 
-/**
- * Abre aba do Gemini em background, aguarda o content script
- * sinalizar que está pronto e então injeta o prompt.
- */
-async function _analisarViaGemini(payload, responder) {
-  console.log('[background] Abrindo aba do Gemini em background...');
+async function _baixarPDFs(anexos, responder) {
+  // Usa o tabId salvo do eProc — não depende de qual aba está ativa
+  const tabId = _tabIdEproc;
+
+  if (!tabId) {
+    responder({ sucesso: false, erro: 'TabId do eProc não encontrado. Reabra o assistente no eProc.' });
+    return;
+  }
+
+  console.log(`[background] Baixando ${anexos.length} PDFs via tabId ${tabId}...`);
 
   try {
-    // Guarda a função responder para usar quando o JSON chegar
-    _abaMensagensGemini.responder = responder;
-    _abaMensagensGemini.payload   = payload;
+    const arquivos = [];
 
-    // Abre a aba em background (active: false = não tira foco do usuário)
-    const aba = await chrome.tabs.create({
-      url:    'https://gemini.google.com/gem/0665e9c704a6', // <--- URL DO SEU GEM AQUI
-      active: false,
-    });
+    for (let i = 0; i < anexos.length; i++) {
+      const anexo = anexos[i];
 
-    _abaMensagensGemini.tabId = aba.id;
-    console.log(`[background] Aba Gemini aberta: tabId=${aba.id}`);
+      // Notifica progresso ao popup
+      chrome.runtime.sendMessage({
+        tipo:  'PROGRESSO_DOWNLOAD',
+        atual: i + 1,
+        total: anexos.length,
+        nome:  anexo.nome
+      }).catch(() => {});
 
-    // O gemini.js vai enviar 'GEMINI_PRONTO' quando o DOM estiver pronto.
-    // Timeout de segurança caso o content script nunca sinalize (ex: login expirado)
-    _abaMensagensGemini.timeout = setTimeout(() => {
-      console.error('[background] Timeout: gemini.js não sinalizou GEMINI_PRONTO.');
-      _fecharAbaGemini();
-      if (_abaMensagensGemini.responder) {
-        _abaMensagensGemini.responder({
-          sucesso: false,
-          erro: 'Timeout: o Gemini não respondeu. Verifique se você está logado em gemini.google.com.'
-        });
-        _abaMensagensGemini.responder = null;
-      }
-    }, 30000); // 30s para o Gemini carregar
+      const res = await chrome.tabs.sendMessage(tabId, {
+        tipo: 'FETCH_PDF_URL',
+        url:  anexo.url,
+        nome: anexo.nome
+      });
 
+      if (!res?.sucesso) throw new Error(res?.erro || `Falha ao baixar "${anexo.nome}".`);
+      arquivos.push({ nome: anexo.nome, docId: anexo.docId || '', base64: res.base64 });
+    }
+
+    responder({ sucesso: true, arquivos });
   } catch (err) {
-    console.error('[background] Erro ao abrir aba Gemini:', err);
+    console.error('[background] Erro no download:', err.message);
     responder({ sucesso: false, erro: err.message });
   }
 }
 
-/**
- * Chamado quando gemini.js envia 'GEMINI_PRONTO'.
- * Envia o prompt para a aba.
- */
-function _enviarPromptParaAba(tabId, _msg) {
-  if (tabId !== _abaMensagensGemini.tabId) return;
+// ================================================================
+// ORQUESTRAÇÃO DO GEMINI
+// ================================================================
 
+async function _analisarViaGemini(payload, responder) {
+  console.log('[background] Abrindo aba do Gemini...');
+
+  try {
+    _abaMensagensGemini.responder = responder;
+    _abaMensagensGemini.payload   = payload;
+
+    const aba = await chrome.tabs.create({
+      url:    'https://gemini.google.com/gem/0665e9c704a6',
+      active: false,   // não tira foco do usuário
+    });
+
+    _abaMensagensGemini.tabId = aba.id;
+    console.log(`[background] Aba Gemini: tabId=${aba.id}`);
+
+    // Timeout de segurança (30s para carregar)
+    _abaMensagensGemini.timeout = setTimeout(() => {
+      console.error('[background] Timeout: Gemini não respondeu.');
+      _fecharAbaGemini();
+      if (_abaMensagensGemini.responder) {
+        _abaMensagensGemini.responder({
+          sucesso: false,
+          erro: 'Timeout: Gemini não respondeu. Verifique o login em gemini.google.com.'
+        });
+        _abaMensagensGemini.responder = null;
+      }
+    }, 30000);
+
+  } catch (err) {
+    console.error('[background] Erro ao abrir Gemini:', err);
+    responder({ sucesso: false, erro: err.message });
+  }
+}
+
+function _enviarPromptParaAba(tabId) {
+  if (tabId !== _abaMensagensGemini.tabId) return;
   clearTimeout(_abaMensagensGemini.timeout);
-  console.log(`[background] gemini.js pronto na tab ${tabId}. Enviando prompt...`);
+  console.log(`[background] Gemini pronto (tab ${tabId}). Enviando payload...`);
 
   chrome.tabs.sendMessage(tabId, {
     tipo:    'INJETAR_PROMPT',
     payload: _abaMensagensGemini.payload,
   }).catch(err => {
-    console.error('[background] Falha ao enviar prompt para gemini.js:', err);
+    console.error('[background] Falha ao enviar para gemini.js:', err);
     _fecharAbaGemini();
     if (_abaMensagensGemini.responder) {
       _abaMensagensGemini.responder({ sucesso: false, erro: err.message });
@@ -193,15 +204,9 @@ function _enviarPromptParaAba(tabId, _msg) {
   });
 }
 
-/**
- * Chamado quando gemini.js envia 'GEMINI_JSON_EXTRAIDO'.
- * Fecha a aba e encaminha o resultado ao popup.
- */
 function _receberRespostaGemini(mensagem) {
-  console.log('[background] JSON recebido do gemini.js. Fechando aba...');
-
+  console.log('[background] JSON recebido. Fechando aba Gemini...');
   _fecharAbaGemini();
-
   if (_abaMensagensGemini.responder) {
     _abaMensagensGemini.responder({
       sucesso: mensagem.sucesso,
@@ -212,9 +217,6 @@ function _receberRespostaGemini(mensagem) {
   }
 }
 
-/**
- * Fecha a aba do Gemini e limpa o estado.
- */
 function _fecharAbaGemini() {
   if (_abaMensagensGemini.tabId) {
     chrome.tabs.remove(_abaMensagensGemini.tabId).catch(() => {});

@@ -1,76 +1,90 @@
 /**
- * content_scripts/gemini.js  v4.0
+ * content_scripts/gemini.js  v6.0
  *
- * CORREÇÃO PRINCIPAL (v4):
- *   _anexarArquivos() substituída. A versão anterior usava DragEvent
- *   sintético (dispatchEvent 'drop') que o Gemini ignora por segurança.
+ * Baseado na inspeção real do DOM do Gemini (gemini.google.com/gem/...):
  *
- *   Nova estratégia (em ordem de tentativa):
- *     1. Encontra o input[type=file] real do Gemini e injeta via DataTransfer
- *     2. Se não encontrar, tenta clicar no botão de anexo para revelar o input
- *     3. Fallback: ClipboardEvent com os arquivos (último recurso)
+ *  FLUXO:
+ *    1. Selecionar modo "Raciocínio" (bard-mode-menu-button → mat-mdc-menu-item)
+ *    2. Anexar PDFs via botão oculto (hidden-local-file-upload-button)
+ *       que faz o Angular criar um input[type=file] dinâmico
+ *    3. Injetar o prompt no campo rich-textarea .ql-editor
+ *    4. Clicar em "Enviar mensagem" (PT-BR)
+ *    5. Aguardar resposta e extrair JSON
  *
- * O restante do fluxo não mudou:
- *   background.js abre esta aba → gemini.js sinaliza GEMINI_PRONTO →
- *   background.js envia INJETAR_PROMPT → gemini.js anexa arquivos,
- *   injeta o prompt, aguarda resposta, extrai JSON, envia de volta.
+ *  SELETORES CONFIRMADOS no DOM real:
+ *    - Campo texto:   rich-textarea .ql-editor[contenteditable="true"]
+ *    - Botão enviar:  button[aria-label="Enviar mensagem"]  (PT-BR!)
+ *    - Botão upload+: button[aria-label="Abrir o menu de envio de arquivo"]
+ *    - Botão oculto:  button.hidden-local-file-upload-button  (xapfileselectortrigger)
+ *    - Modo:          button[aria-label="Abrir seletor de modo"]
+ *    - Menu modo:     .gds-mode-switch-menu .mat-mdc-menu-item
  */
 
 (function () {
   'use strict';
 
   // ================================================================
-  // SELETORES — atualizar aqui quando o Gemini mudar o DOM
+  // SELETORES — confirmados no DOM real do Gemini PT-BR
   // ================================================================
 
-  const SELETORES = {
-    campoTexto: [
-      'rich-textarea .ql-editor',
-      'rich-textarea div[contenteditable="true"]',
-      'div[contenteditable="true"].input-area',
-      'div[contenteditable="true"]',
-    ].join(', '),
+  const SEL = {
+    // Campo de texto Quill
+    campoTexto: 'rich-textarea .ql-editor[contenteditable="true"]',
 
+    // Botão enviar — PT-BR confirmado
     btnEnviar: [
-      'button[aria-label="Send message"]',
-      'button[data-test-id="send-button"]',
+      'button[aria-label="Enviar mensagem"]',
+      'button.send-button.submit',
       'button.send-button',
-      'button[jsname="Qosgbe"]',
     ].join(', '),
 
-    // Seletores do input de arquivo (nova estratégia)
-    inputFile: [
-      'input[type="file"]',
-      'input[accept*="pdf"]',
-      'input[accept*="application"]',
+    // Botão "+" que abre menu de upload
+    btnAbrirMenuUpload: [
+      'button[aria-label="Abrir o menu de envio de arquivo"]',
+      'button.upload-card-button',
     ].join(', '),
 
-    // Botão que abre o seletor de arquivos (ícone de clipe/anexo)
-    btnAnexo: [
-      'button[aria-label*="ttach"]',      // "Attach" ou "Attachment"
-      'button[aria-label*="nexo"]',        // "Anexo" (PT)
-      'button[aria-label*="file"]',
-      'button[aria-label*="upload"]',
-      'button[data-test-id*="attach"]',
-      'button[data-test-id*="file"]',
-      'button[jsname*="attach"]',
-      // Ícone de clipe — procura por SVG com path de clipe dentro de button
-      'button:has(svg)',
+    // Botão oculto de arquivo local (xapfileselectortrigger)
+    // Este é o trigger real — clicar nele faz o Angular criar input[type=file]
+    btnUploadOculto: [
+      'button.hidden-local-file-upload-button',
+      'button[tabindex="-2"][xapfileselectortrigger]:not(.hidden-local-upload-button)',
     ].join(', '),
 
+    // Botão seletor de modo ("Rápido" / "Raciocínio")
+    btnSeletorModo: [
+      'button[aria-label="Abrir seletor de modo"]',
+      'button[data-test-id="bard-mode-menu-button"]',
+    ].join(', '),
+
+    // Item "Raciocínio" no menu de modo (aparece após clicar no seletor)
+    // O menu tem classe gds-mode-switch-menu
+    itemMenuModo: '.gds-mode-switch-menu .mat-mdc-menu-item, .mat-mdc-menu-panel .mat-mdc-menu-item, [role="menuitem"]',
+
+    // Loading/geração em andamento
     loadingAtivo: [
       'mat-progress-bar',
-      'div[data-is-generating="true"]',
-      '.loading-indicator',
-      'model-response [data-is-loading]',
+      '.progress-container',
       'model-response.is-generating',
+      '[data-is-generating="true"]',
     ].join(', '),
 
+    // Última resposta do modelo
     blocoResposta: [
       'model-response:last-of-type .markdown',
       'model-response:last-of-type message-content',
-      '.response-container:last-child .markdown',
       'model-response:last-of-type',
+      '.response-container:last-child .markdown',
+    ].join(', '),
+
+    // Chips de arquivo anexado (confirmação visual do upload)
+    chipArquivo: [
+      'file-upload-chip',
+      '.file-chip',
+      '[data-test-id*="chip"]',
+      'attachment-chip',
+      '.upload-chip',
+      'inline-attachment',
     ].join(', '),
   };
 
@@ -78,285 +92,362 @@
   // TIMEOUTS
   // ================================================================
 
-  const TIMEOUT = {
-    CAMPO_PRONTO_MS:   15000,
-    LOADING_INICIO_MS: 10000,
-    RESPOSTA_MS:      120000,
-    POLL_MS:             500,
-    UPLOAD_ESPERA_MS:   6000,  // espera após injetar arquivos
-    INPUT_REVEAL_MS:    3000,  // espera para o input aparecer após clicar no botão
+  const T = {
+    CAMPO_MS:       15000,
+    MODO_MS:         5000,
+    MENU_ABRIR_MS:   2000,
+    UPLOAD_MS:       8000,  // espera o Gemini processar os arquivos
+    INPUT_DIN_MS:    3000,  // janela para capturar o input dinâmico
+    BOTAO_ATIVO_MS:  8000,
+    LOADING_MS:     10000,
+    RESPOSTA_MS:   180000,  // 3 min (Raciocínio é mais lento)
+    POLL_MS:           300,
   };
 
   // ================================================================
-  // HELPERS
+  // UTILITÁRIOS
   // ================================================================
 
-  function _base64ToFile(base64, nomeArquivo) {
-    const byteCharacters = atob(base64);
-    const byteArray = new Uint8Array(byteCharacters.length);
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteArray[i] = byteCharacters.charCodeAt(i);
-    }
-    return new File([byteArray], nomeArquivo, { type: 'application/pdf' });
-  }
+  const _sleep = ms => new Promise(r => setTimeout(r, ms));
 
-  function _aguardarElemento(seletor, timeoutMs = 10000) {
+  function _aguardarElemento(seletor, ms = 10000) {
     return new Promise((resolve, reject) => {
-      const existente = document.querySelector(seletor);
-      if (existente) return resolve(existente);
-
+      const el = document.querySelector(seletor);
+      if (el) return resolve(el);
       const obs = new MutationObserver(() => {
         const el = document.querySelector(seletor);
         if (el) { obs.disconnect(); resolve(el); }
       });
       obs.observe(document.body, { childList: true, subtree: true });
-
       setTimeout(() => {
         obs.disconnect();
-        reject(new Error(`Timeout: "${seletor}" não apareceu em ${timeoutMs}ms`));
-      }, timeoutMs);
+        reject(new Error(`Timeout (${ms}ms) aguardando: "${seletor}"`));
+      }, ms);
     });
   }
 
-  function _aguardarElementoSumir(seletor, timeoutMs = TIMEOUT.RESPOSTA_MS) {
+  function _aguardarSumir(seletor, ms = T.RESPOSTA_MS) {
     return new Promise((resolve, reject) => {
-      const inicio = Date.now();
-      const checar = () => {
+      const t0 = Date.now();
+      const poll = () => {
         if (!document.querySelector(seletor)) return resolve();
-        if (Date.now() - inicio > timeoutMs)
-          return reject(new Error(`Timeout: "${seletor}" não sumiu em ${timeoutMs}ms`));
-        setTimeout(checar, TIMEOUT.POLL_MS);
+        if (Date.now() - t0 > ms) return reject(new Error(`Timeout (${ms}ms) sumindo: "${seletor}"`));
+        setTimeout(poll, T.POLL_MS);
       };
-      checar();
+      // Se já não existe, resolve imediatamente
+      if (!document.querySelector(seletor)) return resolve();
+      poll();
     });
   }
 
-  function _aguardarBotaoAtivo(timeoutMs = 8000) {
+  function _aguardarBotaoAtivo(ms = T.BOTAO_ATIVO_MS) {
     return new Promise((resolve, reject) => {
-      const inicio = Date.now();
-      const checar = () => {
-        const btn = document.querySelector(SELETORES.btnEnviar);
-        if (btn && !btn.disabled) return resolve(btn);
-        if (Date.now() - inicio > timeoutMs)
-          return reject(new Error('Botão de envio não ficou ativo.'));
-        setTimeout(checar, 200);
+      const t0 = Date.now();
+      const poll = () => {
+        const btn = document.querySelector(SEL.btnEnviar);
+        if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') return resolve(btn);
+        if (Date.now() - t0 > ms) return reject(new Error(`Botão "Enviar mensagem" não ficou ativo em ${ms}ms.`));
+        setTimeout(poll, 200);
       };
-      checar();
+      poll();
     });
   }
 
-  function _sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
+  function _base64ToFile(base64, nome) {
+    const bytes = atob(base64);
+    const arr   = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+    return new File([arr], nome, { type: 'application/pdf' });
   }
 
   // ================================================================
-  // UPLOAD DE ARQUIVOS — nova implementação
+  // PASSO 1 — SELECIONAR MODO RACIOCÍNIO
   // ================================================================
 
-  /**
-   * Estratégia 1: injeta diretamente no input[type=file] se ele existir no DOM.
-   * Usa DataTransfer para criar um FileList sintético e dispara 'change'.
-   */
-  async function _tentarInjetarNoInput(arquivos) {
-    const input = document.querySelector(SELETORES.inputFile);
-    if (!input) return false;
+  async function _selecionarRaciocinio() {
+    console.log('[gemini.js] Verificando modo atual...');
 
-    console.log('[gemini.js] input[type=file] encontrado diretamente. Injetando...');
-
-    const dt = new DataTransfer();
-    for (const arq of arquivos) {
-      dt.items.add(_base64ToFile(arq.base64, arq.nome));
-    }
-
-    // Define a propriedade files via Object.defineProperty (FileList é read-only)
-    Object.defineProperty(input, 'files', {
-      value: dt.files,
-      writable: true,
-      configurable: true,
-    });
-
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-    input.dispatchEvent(new Event('input',  { bubbles: true }));
-
-    console.log(`[gemini.js] ${arquivos.length} arquivo(s) injetado(s) via input[type=file].`);
-    await _sleep(TIMEOUT.UPLOAD_ESPERA_MS);
-    return true;
-  }
-
-  /**
-   * Estratégia 2: clica no botão de anexo para revelar o input,
-   * depois injeta os arquivos nele.
-   */
-  async function _tentarViaCliqueBotaoAnexo(arquivos) {
-    // Procura o botão de clipe/anexo — filtra botões de envio
-    const botoes = Array.from(document.querySelectorAll('button'));
-    const btnAnexo = botoes.find(btn => {
-      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-      const testId = (btn.getAttribute('data-test-id') || '').toLowerCase();
-      return (
-        (label.includes('attach') || label.includes('file') ||
-         label.includes('upload') || label.includes('nexo') ||
-         testId.includes('attach') || testId.includes('file')) &&
-        !label.includes('send') && !label.includes('enviar')
-      );
-    });
-
-    if (!btnAnexo) {
-      console.warn('[gemini.js] Botão de anexo não encontrado.');
-      return false;
-    }
-
-    console.log('[gemini.js] Clicando no botão de anexo para revelar input...');
-    btnAnexo.click();
-
-    // Aguarda o input aparecer após o clique
     try {
-      await _aguardarElemento(SELETORES.inputFile, TIMEOUT.INPUT_REVEAL_MS);
-    } catch (_) {
-      console.warn('[gemini.js] input[type=file] não apareceu após clique no botão de anexo.');
-      return false;
-    }
+      const btnModo = await _aguardarElemento(SEL.btnSeletorModo, T.MODO_MS);
+      const textoAtual = btnModo.textContent?.trim().toLowerCase() || '';
 
-    return await _tentarInjetarNoInput(arquivos);
+      // Já está no modo correto?
+      if (textoAtual.includes('racioc') || textoAtual.includes('reason') ||
+          textoAtual.includes('think')  || textoAtual.includes('deep')) {
+        console.log('[gemini.js] Modo Raciocínio já ativo.');
+        return;
+      }
+
+      console.log(`[gemini.js] Modo atual: "${textoAtual}". Abrindo menu...`);
+      btnModo.click();
+
+      // Aguarda o menu abrir
+      await _sleep(800);
+
+      // Procura o item "Raciocínio" em todos os itens visíveis do menu
+      const itens = Array.from(document.querySelectorAll(SEL.itemMenuModo));
+      console.log(`[gemini.js] Itens no menu: ${itens.map(i => i.textContent?.trim()).join(' | ')}`);
+
+      const opcao = itens.find(el => {
+        const txt = el.textContent?.toLowerCase() || '';
+        return txt.includes('racioc') || txt.includes('reason') ||
+               txt.includes('think')  || txt.includes('deep')   ||
+               txt.includes('flash thinking') || txt.includes('2.0 flash');
+      });
+
+      if (opcao) {
+        opcao.click();
+        console.log(`[gemini.js] ✅ Modo selecionado: "${opcao.textContent?.trim()}"`);
+        await _sleep(600);
+      } else {
+        // Fecha o menu e continua sem o modo
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await _sleep(300);
+        console.warn('[gemini.js] ⚠️ Opção Raciocínio não encontrada. Continuando com modo padrão.');
+      }
+
+    } catch (err) {
+      console.warn('[gemini.js] Seleção de modo falhou (não crítico):', err.message);
+    }
   }
 
-  /**
-   * Estratégia 3: ClipboardEvent com os arquivos como fallback.
-   * Alguns editores contenteditable aceitam paste de arquivos.
-   */
-  async function _tentarViaPaste(arquivos) {
-    console.log('[gemini.js] Tentando upload via ClipboardEvent (paste)...');
-
-    const campo = document.querySelector(SELETORES.campoTexto);
-    if (!campo) return false;
-
-    const dt = new DataTransfer();
-    for (const arq of arquivos) {
-      dt.items.add(_base64ToFile(arq.base64, arq.nome));
-    }
-
-    campo.focus();
-    const pasteEvent = new ClipboardEvent('paste', {
-      bubbles: true,
-      cancelable: true,
-      clipboardData: dt,
-    });
-    campo.dispatchEvent(pasteEvent);
-
-    await _sleep(TIMEOUT.UPLOAD_ESPERA_MS);
-    return true;
-  }
+  // ================================================================
+  // PASSO 2 — ANEXAR ARQUIVOS
+  // ================================================================
 
   /**
-   * Orquestrador: tenta as estratégias em ordem até uma funcionar.
+   * O Gemini usa o padrão xapfileselectortrigger do Angular:
+   *   1. O botão oculto (hidden-local-file-upload-button) é o trigger
+   *   2. Ao ser clicado, o Angular cria dinamicamente um input[type=file]
+   *   3. Precisamos capturar esse input ANTES de ele abrir o dialog do OS
+   *   4. Injetamos os arquivos via DataTransfer e disparamos 'change'
+   *
+   * O MutationObserver precisa estar ativo ANTES do clique no botão.
    */
   async function _anexarArquivos(arquivos) {
-    if (!arquivos || arquivos.length === 0) return;
+    if (!arquivos?.length) {
+      console.log('[gemini.js] Nenhum arquivo para anexar.');
+      return;
+    }
 
-    console.log(`[gemini.js] Iniciando upload de ${arquivos.length} arquivo(s)...`);
+    console.log(`[gemini.js] Anexando ${arquivos.length} arquivo(s)...`);
 
-    // Estratégia 1: input direto
-    if (await _tentarInjetarNoInput(arquivos)) return;
+    const sucesso = await new Promise(resolve => {
+      let resolvido = false;
 
-    // Estratégia 2: clicar no botão de anexo e depois injetar
-    if (await _tentarViaCliqueBotaoAnexo(arquivos)) return;
+      const resolver = (ok) => {
+        if (resolvido) return;
+        resolvido = true;
+        clearTimeout(timeout);
+        obs.disconnect();
+        resolve(ok);
+      };
 
-    // Estratégia 3: paste
-    if (await _tentarViaPaste(arquivos)) return;
+      // Timeout: se o input não aparecer em INPUT_DIN_MS, desiste
+      const timeout = setTimeout(() => {
+        console.warn('[gemini.js] Input dinâmico não apareceu. Upload pode ter falhado.');
+        resolver(false);
+      }, T.INPUT_DIN_MS);
 
-    // Nenhuma estratégia funcionou — loga mas não lança erro
-    // O prompt será enviado sem os arquivos e o Gem usará apenas as instruções
-    console.error('[gemini.js] Nenhuma estratégia de upload funcionou. Prosseguindo sem arquivos.');
+      // Observa criação de input[type=file] em qualquer lugar do DOM
+      const obs = new MutationObserver(mutations => {
+        for (const m of mutations) {
+          for (const node of m.addedNodes) {
+            if (node.nodeType !== 1) continue;
+
+            // Verifica se o nó adicionado É um input[type=file]
+            const input = (node.tagName === 'INPUT' && node.type === 'file')
+              ? node
+              : node.querySelector?.('input[type="file"]');
+
+            if (!input) continue;
+
+            // Capturado! Injeta os arquivos imediatamente
+            resolver(true);
+            console.log('[gemini.js] ✅ Input dinâmico capturado. Injetando arquivos...');
+
+            const dt = new DataTransfer();
+            for (const arq of arquivos) {
+              dt.items.add(_base64ToFile(arq.base64, arq.nome));
+            }
+
+            // FileList é read-only — usa defineProperty
+            try {
+              Object.defineProperty(input, 'files', {
+                value: dt.files, writable: true, configurable: true,
+              });
+            } catch (_) {
+              // Alguns ambientes não permitem defineProperty em inputs
+              // Tenta atribuição direta como fallback
+              try { input.files = dt.files; } catch (_2) {}
+            }
+
+            // Dispara eventos que o Angular/Quill escuta
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new Event('input',  { bubbles: true }));
+
+            console.log(`[gemini.js] ${arquivos.length} arquivo(s) injetado(s).`);
+            return;
+          }
+        }
+      });
+
+      // Observa o body inteiro com subtree
+      obs.observe(document.body, { childList: true, subtree: true });
+
+      // Clica no botão oculto para acionar o Angular
+      // Tenta o botão oculto direto primeiro; se não existir, abre o menu "+"
+      const btnOculto = document.querySelector(SEL.btnUploadOculto);
+      if (btnOculto) {
+        console.log('[gemini.js] Clicando no botão oculto de upload...');
+        btnOculto.click();
+      } else {
+        // Abre o menu "+" e então clica no botão oculto
+        const btnMenu = document.querySelector(SEL.btnAbrirMenuUpload);
+        if (btnMenu) {
+          console.log('[gemini.js] Abrindo menu de upload...');
+          btnMenu.click();
+          // Aguarda um tick para o menu abrir, então clica no botão oculto
+          setTimeout(() => {
+            const btnOculto2 = document.querySelector(SEL.btnUploadOculto);
+            if (btnOculto2) {
+              console.log('[gemini.js] Clicando no botão oculto (pós-menu)...');
+              btnOculto2.click();
+            } else {
+              console.warn('[gemini.js] Botão oculto não encontrado após abrir menu.');
+              resolver(false);
+            }
+          }, 500);
+        } else {
+          console.warn('[gemini.js] Nenhum botão de upload encontrado.');
+          resolver(false);
+        }
+      }
+    });
+
+    if (sucesso) {
+      // Aguarda o Gemini processar e exibir os chips dos arquivos
+      console.log('[gemini.js] Aguardando processamento dos arquivos...');
+      await _sleep(T.UPLOAD_MS);
+
+      const chips = document.querySelectorAll(SEL.chipArquivo);
+      if (chips.length > 0) {
+        console.log(`[gemini.js] ✅ ${chips.length} chip(s) de arquivo visível(is).`);
+      } else {
+        console.warn('[gemini.js] Chips não detectados — verificar se os arquivos foram aceitos.');
+      }
+    }
   }
 
   // ================================================================
-  // INJEÇÃO DO PROMPT
+  // PASSO 3 — INJETAR PROMPT NO CAMPO DE TEXTO
   // ================================================================
 
   async function _injetarPrompt(texto) {
-    console.log('[gemini.js] Aguardando campo de texto...');
-    const campo = await _aguardarElemento(SELETORES.campoTexto, TIMEOUT.CAMPO_PRONTO_MS);
+    console.log('[gemini.js] Injetando prompt...');
+    const campo = await _aguardarElemento(SEL.campoTexto, T.CAMPO_MS);
 
     campo.focus();
+    // Limpa qualquer conteúdo anterior
     document.execCommand('selectAll', false, null);
-    document.execCommand('delete', false, null);
+    document.execCommand('delete',    false, null);
 
-    const CHUNK = 5000;
-    for (let i = 0; i < texto.length; i += CHUNK) {
-      document.execCommand('insertText', false, texto.slice(i, i + CHUNK));
-      await _sleep(0);
+    // Insere em chunks de 5K para não travar a thread
+    for (let i = 0; i < texto.length; i += 5000) {
+      document.execCommand('insertText', false, texto.slice(i, i + 5000));
+      if (i + 5000 < texto.length) await _sleep(0); // yield
     }
 
-    console.log(`[gemini.js] Prompt injetado: ${texto.length} chars`);
+    console.log(`[gemini.js] ✅ Prompt injetado (${texto.length} chars).`);
   }
 
   // ================================================================
-  // ENVIO E AGUARDO DA RESPOSTA
+  // PASSO 4 — ENVIAR E AGUARDAR RESPOSTA
   // ================================================================
 
   async function _enviarEAguardar() {
+    // Aguarda o botão de envio ficar habilitado (campos + arquivos prontos)
     const btn = await _aguardarBotaoAtivo();
     btn.click();
-    console.log('[gemini.js] Mensagem enviada. Aguardando resposta...');
+    console.log('[gemini.js] ✅ Mensagem enviada. Aguardando geração...');
 
+    // Aguarda o loading começar (confirma que o Gemini recebeu)
     try {
-      await _aguardarElemento(SELETORES.loadingAtivo, TIMEOUT.LOADING_INICIO_MS);
-      console.log('[gemini.js] Loading detectado — Gemini está gerando...');
+      await _aguardarElemento(SEL.loadingAtivo, T.LOADING_MS);
+      console.log('[gemini.js] Loading detectado — gerando resposta...');
     } catch (_) {
-      console.warn('[gemini.js] Loading não detectado — pode ter sido muito rápido.');
+      console.warn('[gemini.js] Loading não detectado (pode ter sido instantâneo).');
     }
 
-    await _aguardarElementoSumir(SELETORES.loadingAtivo, TIMEOUT.RESPOSTA_MS);
-    console.log('[gemini.js] Resposta completa.');
+    // Aguarda o loading terminar
+    await _aguardarSumir(SEL.loadingAtivo, T.RESPOSTA_MS);
+    console.log('[gemini.js] ✅ Geração concluída.');
 
-    await _sleep(1000);
+    // Aguarda o DOM estabilizar
+    await _sleep(1500);
 
-    let textoResposta = '';
-    for (const seletor of SELETORES.blocoResposta.split(', ')) {
-      const els = document.querySelectorAll(seletor);
-      if (els.length > 0) {
-        textoResposta = els[els.length - 1].textContent || '';
-        if (textoResposta.trim().length > 50) break;
+    // Extrai o texto da última resposta
+    for (const sel of SEL.blocoResposta.split(', ')) {
+      const els = document.querySelectorAll(sel.trim());
+      if (!els.length) continue;
+      const txt = els[els.length - 1].textContent?.trim() || '';
+      if (txt.length > 50) {
+        console.log(`[gemini.js] ✅ Resposta extraída: ${txt.length} chars.`);
+        return txt;
       }
     }
 
-    if (!textoResposta.trim()) {
-      throw new Error('Resposta do Gemini está vazia ou não foi encontrada no DOM.');
-    }
-
-    console.log(`[gemini.js] Resposta extraída: ${textoResposta.length} chars`);
-    return textoResposta;
+    throw new Error('Resposta vazia ou não encontrada no DOM após geração.');
   }
 
   // ================================================================
-  // EXTRAÇÃO DO JSON
+  // EXTRAÇÃO DO JSON DA RESPOSTA
   // ================================================================
 
-  function _extrairJSON(textoResposta) {
-    let limpo = textoResposta
-      .replace(/```json\s*/gi, '')
-      .replace(/```\s*/gi, '')
-      .replace(/\[cite[^\]]*\]/gi, '')
-      .replace(/【[^】]*】/g, '')
+  function _extrairJSON(texto) {
+    const limpo = texto
+      .replace(/```json\s*/gi, '').replace(/```\s*/gi, '')
+      .replace(/\[cite[^\]]*\]/gi, '').replace(/【[^】]*】/g, '')
       .trim();
 
     const match = limpo.match(/\{[\s\S]*\}/);
-    if (!match) {
-      throw new Error(`JSON não encontrado na resposta (${textoResposta.length} chars).`);
-    }
+    if (!match) throw new Error(`JSON não encontrado na resposta (${texto.length} chars).`);
 
     try {
       return JSON.parse(match[0]);
     } catch (e) {
+      // Tenta reparar JSON truncado
+      const reparado = _repararJSON(match[0]);
+      if (reparado) return reparado;
       throw new Error(`JSON inválido: ${e.message}`);
     }
   }
 
+  function _repararJSON(jsonBruto) {
+    try {
+      let txt = jsonBruto.replace(/,\s*$/, '').replace(/:\s*$/, ': null').replace(/:\s*"[^"]*$/, ': ""');
+      let chaves = 0, colchetes = 0, dentroStr = false, esc = false;
+      for (const c of txt) {
+        if (esc)       { esc = false; continue; }
+        if (c === '\\') { esc = true;  continue; }
+        if (c === '"')  { dentroStr = !dentroStr; continue; }
+        if (dentroStr)  continue;
+        if (c === '{') chaves++;
+        if (c === '}') chaves--;
+        if (c === '[') colchetes++;
+        if (c === ']') colchetes--;
+      }
+      while (colchetes > 0) { txt += ']'; colchetes--; }
+      while (chaves   > 0) { txt += '}'; chaves--;    }
+      return JSON.parse(txt);
+    } catch (_) { return null; }
+  }
+
   // ================================================================
-  // HUB DE MENSAGENS
+  // HUB DE MENSAGENS — recebe INJETAR_PROMPT do background.js
   // ================================================================
 
-  chrome.runtime.onMessage.addListener((msg, _remetente, responder) => {
+  chrome.runtime.onMessage.addListener((msg, _sender, responder) => {
     if (msg.tipo !== 'INJETAR_PROMPT') return;
 
     console.log('[gemini.js] INJETAR_PROMPT recebido. Iniciando automação...');
@@ -364,15 +455,19 @@
 
     (async () => {
       try {
-        // 1. Anexa os PDFs ANTES de injetar o prompt
-        //    (o campo de texto precisa estar pronto primeiro)
-        await _aguardarElemento(SELETORES.campoTexto, TIMEOUT.CAMPO_PRONTO_MS);
+        // Garante que o campo de texto está pronto antes de tudo
+        await _aguardarElemento(SEL.campoTexto, T.CAMPO_MS);
+
+        // 1. Seleciona modo Raciocínio
+        await _selecionarRaciocinio();
+
+        // 2. Anexa os PDFs
         await _anexarArquivos(msg.payload.arquivos);
 
-        // 2. Injeta o prompt
+        // 3. Injeta o prompt
         await _injetarPrompt(msg.payload.texto);
 
-        // 3. Envia e aguarda resposta
+        // 4. Envia e aguarda resposta
         const textoResposta = await _enviarEAguardar();
         const json = _extrairJSON(textoResposta);
 
@@ -396,19 +491,18 @@
   });
 
   // ================================================================
-  // INICIALIZAÇÃO — sinaliza que está pronto
+  // INICIALIZAÇÃO — sinaliza ao background.js que está pronto
   // ================================================================
 
   async function _inicializar() {
-    console.log('[gemini.js] Carregado. Aguardando DOM do Gemini...');
+    console.log('[gemini.js] Aguardando campo de texto do Gemini...');
     try {
-      await _aguardarElemento(SELETORES.campoTexto, TIMEOUT.CAMPO_PRONTO_MS);
-      console.log('[gemini.js] Campo de texto pronto. Sinalizando background...');
-      chrome.runtime.sendMessage({ tipo: 'GEMINI_PRONTO' }).catch(() => {});
+      await _aguardarElemento(SEL.campoTexto, T.CAMPO_MS);
+      console.log('[gemini.js] ✅ Pronto. Sinalizando background...');
     } catch (err) {
-      console.error('[gemini.js] Campo de texto não apareceu:', err.message);
-      chrome.runtime.sendMessage({ tipo: 'GEMINI_PRONTO' }).catch(() => {});
+      console.warn('[gemini.js] Campo de texto não apareceu:', err.message);
     }
+    chrome.runtime.sendMessage({ tipo: 'GEMINI_PRONTO' }).catch(() => {});
   }
 
   if (document.readyState === 'loading') {
