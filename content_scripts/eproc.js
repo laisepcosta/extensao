@@ -1,27 +1,25 @@
 /**
- * content_scripts/eproc.js  v4.0
+ * content_scripts/eproc.js  v4.1
+ *
+ * CORREÇÃO v4.1 — Hub de mensagens:
+ *   O listener anterior retornava `undefined` implicitamente para
+ *   SOLICITAR_DADOS_PROCESSO (via `return;` sem valor), e `true` para
+ *   FETCH_PDF_URL. O Chrome fecha o canal de resposta assíncrono quando
+ *   o listener retorna qualquer valor falsy (undefined, false, null).
+ *
+ *   O efeito prático: quando o background.js chamava chrome.tabs.sendMessage
+ *   com FETCH_PDF_URL, o canal já estava fechado antes do fetchPDFDireto
+ *   terminar, então o `responder({ sucesso: true, base64 })` era silenciosa-
+ *   mente descartado. O background recebia `undefined` como resposta e
+ *   lançava "Falha ao baixar" — ou simplesmente não recebia resposta alguma.
+ *
+ *   FIX: listener reestruturado com retornos explícitos:
+ *     - SOLICITAR_DADOS_PROCESSO → síncrono → return false
+ *     - FETCH_PDF_URL            → assíncrono → return true  (mantém canal)
+ *     - default                  → return false
  *
  * NOVIDADE v4: extrairDadosTela()
- *   Lê diretamente do DOM da capa do processo todos os campos
- *   disponíveis — número, processo originário, partes, órgão julgador,
- *   assunto — e os inclui no payload enviado ao side panel.
- *
- *   Esses dados substituem a necessidade de o usuário copiar
- *   informações do SGP e enviá-las ao Gemini.
- *
- * SELETORES MAPEADOS (eProc TJMG 9.18.x):
- *   #txtNumProcesso              → número formatado do processo eProc
- *   input[name="num_processo"]   → número bruto (sem formatação)
- *   #tableRelacionado td         → processo originário (primeiro relacionado)
- *   #txtOrgaoJulgador            → órgão julgador completo
- *   #tblPartesERepresentantes    → tabela de partes (requerente/requerido)
- *   #fldAssuntos table tbody tr  → assuntos do processo
- *   title                        → número formatado (fallback)
- *
- * DADOS DO SGP (número GV, natureza, vencimento, devedor) NÃO estão
- * disponíveis no DOM do eProc — são campos do sistema SGP/TJMG.
- * Esses dados são preenchidos manualmente pelo funcionário na seção A
- * do side panel, com autocompletar se o Gemini os identificar nos docs.
+ *   Lê diretamente do DOM da capa do processo todos os campos disponíveis.
  */
 
 (function () {
@@ -54,49 +52,30 @@
     return { bruto, formatado };
   }
 
-  /**
-   * Extrai todos os dados da capa do processo disponíveis no DOM.
-   * Retorna um objeto com campos nomeados prontos para exibir no side panel.
-   */
   function extrairDadosTela() {
     const dados = {
-      // Número do processo no eProc (formatado e bruto)
-      numeroEproc: '',
-      numeroBruto: '',
-
-      // Processo originário (primeiro da lista de relacionados)
+      numeroEproc:        '',
+      numeroBruto:        '',
       processoOriginario: '',
-
-      // Órgão julgador e colegiado
-      orgaoJulgador: '',
-      colegiado: '',
-
-      // Partes
-      requerentes: [],   // cada item: { nome, representantes[] }
-      requeridos:  [],
-
-      // Assunto principal
-      assuntoPrincipal: '',
-
-      // Localizadores (pode indicar tipo de petição)
-      localizadores: [],
+      orgaoJulgador:      '',
+      colegiado:          '',
+      requerentes:        [],
+      requeridos:         [],
+      assuntoPrincipal:   '',
+      localizadores:      [],
     };
 
-    // ── Números ──────────────────────────────────────────────────
-    dados.numeroBruto   = document.querySelector('input[name="num_processo"]')?.value?.trim() || '';
-    dados.numeroEproc   = document.getElementById('txtNumProcesso')?.textContent?.trim()
+    dados.numeroBruto = document.querySelector('input[name="num_processo"]')?.value?.trim() || '';
+    dados.numeroEproc = document.getElementById('txtNumProcesso')?.textContent?.trim()
       || document.title.match(/^([\d\-\.]+)/)?.[1]?.trim()
       || dados.numeroBruto;
 
-    // ── Processo originário ───────────────────────────────────────
-    // #tableRelacionado tem linhas: número | "|" | tipo | espaço | espaço
     const linhasRelac = document.querySelectorAll('#tableRelacionado tr');
     linhasRelac.forEach(tr => {
       const tds = tr.querySelectorAll('td');
       if (tds.length >= 3) {
         const num  = tds[0]?.textContent?.trim();
         const tipo = tds[2]?.textContent?.trim().toLowerCase();
-        // Pega o "Originário" ou, se não existir, o primeiro relacionado
         if (tipo === 'originário' || tipo === 'originario') {
           dados.processoOriginario = num;
         } else if (!dados.processoOriginario && num) {
@@ -105,13 +84,9 @@
       }
     });
 
-    // ── Órgão julgador e colegiado ────────────────────────────────
     dados.orgaoJulgador = document.getElementById('txtOrgaoJulgador')?.textContent?.trim() || '';
     dados.colegiado     = document.getElementById('txtOrgaoColegiado')?.textContent?.trim() || '';
 
-    // ── Partes ────────────────────────────────────────────────────
-    // A tabela #tblPartesERepresentantes tem duas colunas: REQUERENTE | REQUERIDO
-    // Cada célula tem múltiplos divs de partes com .lblParte e .lblAdvParte
     const tblPartes = document.getElementById('tblPartesERepresentantes');
     if (tblPartes) {
       const celulas = tblPartes.querySelectorAll('tbody tr:first-child td');
@@ -119,16 +94,11 @@
       const extrairPartesColuna = (td) => {
         if (!td) return [];
         const partes = [];
-
-        // Cada parte fica num div com classe autorReu ou similar
-        // O nome da parte está em a.infraNomeParte ou label.lblParte
         const nomesEls = td.querySelectorAll('label.lblParte, a.infraNomeParte, span.infraNomeParte');
 
         nomesEls.forEach(el => {
           const nome = el.textContent?.trim();
           if (!nome) return;
-
-          // Representantes ficam após o elemento da parte (lblAdvParte)
           const representantes = [];
           let next = el.parentElement?.nextElementSibling;
           while (next) {
@@ -136,15 +106,13 @@
             if (adv) {
               representantes.push(adv.textContent?.trim());
             } else if (next.classList?.contains('lblParte') || next.classList?.contains('infraNomeParte')) {
-              break; // chegou na próxima parte
+              break;
             }
             next = next.nextElementSibling;
           }
-
           partes.push({ nome, representantes });
         });
 
-        // Fallback: se não encontrou com os seletores acima, pega texto simples
         if (partes.length === 0) {
           const texto = td.textContent?.trim();
           if (texto) partes.push({ nome: texto.split('\n')[0].trim(), representantes: [] });
@@ -157,18 +125,13 @@
       dados.requeridos  = extrairPartesColuna(celulas[1]);
     }
 
-    // ── Assunto principal ─────────────────────────────────────────
-    // Em #fldAssuntos, a linha com data-assunto-principal="true" tem o assunto principal
     const assuntoEl = document.querySelector('#fldAssuntos tr[data-assunto-principal="true"] td:nth-child(2)');
     if (assuntoEl) {
-      // Remove o conteúdo dos labels de precedentes
       const clone = assuntoEl.cloneNode(true);
       clone.querySelectorAll('label, a').forEach(el => el.remove());
       dados.assuntoPrincipal = clone.textContent?.trim() || '';
     }
 
-    // ── Localizadores ─────────────────────────────────────────────
-    // Disponíveis no JSON oculto em #hdnSelLocalizadoresProcesso
     try {
       const hdnLoc = document.getElementById('hdnSelLocalizadoresProcesso')?.value;
       if (hdnLoc) {
@@ -176,7 +139,6 @@
         dados.localizadores = locJson.map(l => l.text).filter(Boolean);
       }
     } catch (_) {
-      // Fallback: lê o texto visível dos localizadores
       const locSpans = document.querySelectorAll('#dvLocalizadoresOrgao a[title="Abrir edição de localizadores"]');
       locSpans.forEach(a => {
         const texto = a.textContent?.trim();
@@ -193,13 +155,13 @@
     const eventos = [];
 
     linhas.forEach(tr => {
-      const numero   = tr.id.replace('trEvento', '');
-      const colunas  = tr.querySelectorAll(':scope > td');
-      const dataTexto = colunas[2]?.textContent?.trim() || '';
-      const data     = dataTexto.split(' ')[0];
+      const numero      = tr.id.replace('trEvento', '');
+      const colunas     = tr.querySelectorAll(':scope > td');
+      const dataTexto   = colunas[2]?.textContent?.trim() || '';
+      const data        = dataTexto.split(' ')[0];
       const labelDescricao = tr.querySelector('.infraEventoDescricao');
-      const tipo     = labelDescricao?.textContent?.trim() || '';
-      const parte    = tr.dataset.parte || '';
+      const tipo        = labelDescricao?.textContent?.trim() || '';
+      const parte       = tr.dataset.parte || '';
 
       const linksDoc = tr.querySelectorAll('a.infraLinkDocumento');
       const documentos = Array.from(linksDoc)
@@ -213,7 +175,7 @@
             nome:  a.dataset.nome  || a.textContent.trim(),
             label: a.textContent.trim(),
             docId: a.dataset.doc   || '',
-            url:   urlAbsoluta
+            url:   urlAbsoluta,
           };
         });
 
@@ -224,13 +186,13 @@
   }
 
   // ================================================================
-  // 3. FETCH DIRETO DE PDF (3 camadas — sem alteração)
+  // 3. FETCH DIRETO DE PDF (3 camadas)
   // ================================================================
 
   async function fetchPDFDireto(urlInicial, nome) {
-    const res1   = await fetch(urlInicial, { credentials: 'include' });
-    const html1  = await res1.text();
-    const doc1   = new DOMParser().parseFromString(html1, 'text/html');
+    const res1  = await fetch(urlInicial, { credentials: 'include' });
+    const html1 = await res1.text();
+    const doc1  = new DOMParser().parseFromString(html1, 'text/html');
     const iframe1 = doc1.querySelector('iframe#conteudoIframe');
 
     if (!iframe1?.getAttribute('src')) {
@@ -238,8 +200,8 @@
     }
 
     const urlCamada2 = new URL(iframe1.getAttribute('src'), urlInicial).href;
-    const res2  = await fetch(urlCamada2, { credentials: 'include' });
-    const ct2   = res2.headers.get('content-type') || '';
+    const res2 = await fetch(urlCamada2, { credentials: 'include' });
+    const ct2  = res2.headers.get('content-type') || '';
 
     if (ct2.includes('pdf') || ct2.includes('octet')) {
       const blob2  = await res2.blob();
@@ -251,8 +213,8 @@
       });
     }
 
-    const html2   = await res2.text();
-    const doc2    = new DOMParser().parseFromString(html2, 'text/html');
+    const html2  = await res2.text();
+    const doc2   = new DOMParser().parseFromString(html2, 'text/html');
     const iframe2 = doc2.querySelector('iframe#conteudoIframe');
 
     let urlPDF;
@@ -286,6 +248,15 @@
 
   // ================================================================
   // 4. HUB DE MENSAGENS
+  //
+  // REGRA CRÍTICA do Chrome Extensions:
+  //   O listener deve retornar `true` para manter o canal de resposta
+  //   aberto quando a resposta é assíncrona (Promise/await).
+  //   Retornar `undefined` ou `false` fecha o canal imediatamente —
+  //   qualquer chamada posterior a responder() é silenciosamente ignorada.
+  //
+  //   SOLICITAR_DADOS_PROCESSO → síncrono → return false
+  //   FETCH_PDF_URL            → assíncrono → return true
   // ================================================================
 
   chrome.runtime.onMessage.addListener((msg, _remetente, responder) => {
@@ -293,28 +264,32 @@
     if (msg.tipo === 'SOLICITAR_DADOS_PROCESSO') {
       if (!ehPaginaDeProcesso()) {
         responder({ encontrado: false });
-        return;
+      } else {
+        const { bruto, formatado } = extrairNumeroProcesso();
+        responder({
+          encontrado: true,
+          payload: {
+            numeroProcessoBruto:     bruto,
+            numeroProcessoFormatado: formatado,
+            baseUrl: window.location.href.replace(/[^/]*(\?.*)?$/, ''),
+            dadosTela: extrairDadosTela(),
+            eventos:   extrairEventos(),
+          }
+        });
       }
-      const { bruto, formatado } = extrairNumeroProcesso();
-      responder({
-        encontrado: true,
-        payload: {
-          numeroProcessoBruto:     bruto,
-          numeroProcessoFormatado: formatado,
-          baseUrl: window.location.href.replace(/[^/]*(\?.*)?$/, ''),
-          dadosTela: extrairDadosTela(),   // ← NOVO
-          eventos:   extrairEventos()
-        }
-      });
-      return;
+      return false; // síncrono — fecha o canal corretamente
     }
 
     if (msg.tipo === 'FETCH_PDF_URL') {
+      // Assíncrono — retorna true para manter o canal aberto
+      // até que fetchPDFDireto resolva e responder() seja chamado.
       fetchPDFDireto(msg.url, msg.nome)
         .then(base64 => responder({ sucesso: true, base64 }))
         .catch(erro  => responder({ sucesso: false, erro: erro.message }));
-      return true;
+      return true; // OBRIGATÓRIO — mantém o canal de resposta aberto
     }
+
+    return false; // default — fecha o canal para mensagens não tratadas
   });
 
   // ================================================================
@@ -328,9 +303,9 @@
     }
 
     const { bruto, formatado } = extrairNumeroProcesso();
-    const eventos    = extrairEventos();
-    const dadosTela  = extrairDadosTela();
-    const totalDocs  = eventos.reduce((acc, ev) => acc + ev.documentos.length, 0);
+    const eventos   = extrairEventos();
+    const dadosTela = extrairDadosTela();
+    const totalDocs = eventos.reduce((acc, ev) => acc + ev.documentos.length, 0);
 
     console.log(
       `[Assistente eProc] Processo ${formatado} | ` +
@@ -344,8 +319,8 @@
         numeroProcessoBruto:     bruto,
         numeroProcessoFormatado: formatado,
         baseUrl: window.location.href.replace(/[^/]*(\?.*)?$/, ''),
-        dadosTela,   // ← NOVO
-        eventos
+        dadosTela,
+        eventos,
       }
     }).catch(() => {
       console.debug('[Assistente eProc] Side panel não estava aberto.');

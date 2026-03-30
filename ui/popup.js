@@ -137,12 +137,16 @@ document.addEventListener('DOMContentLoaded', function () {
     if (msg.tipo === 'DADOS_PROCESSO') _receberDadosProcesso(msg.payload);
   });
 
-  chrome.storage.session.get('processoDetectado').then(resultado => {
-    if (resultado.processoDetectado) {
-      _receberDadosProcesso(resultado.processoDetectado);
-      chrome.storage.session.remove('processoDetectado');
+  chrome.storage.session.get(['processoDetectado', 'eprocTabId']).then(resultado => {
+  if (resultado.processoDetectado) {
+    // Informa o background qual é o tabId para downloads funcionarem
+    if (resultado.eprocTabId) {
+      chrome.runtime.sendMessage({ tipo: 'REGISTRAR_TAB_EPROC', tabId: resultado.eprocTabId });
     }
-  });
+    _receberDadosProcesso(resultado.processoDetectado);
+    chrome.storage.session.remove(['processoDetectado', 'eprocTabId']);
+  }
+});
 
   document.getElementById('btnUsarModoManual')
     ?.addEventListener('click', _ativarModoManual);
